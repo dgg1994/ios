@@ -1,0 +1,50 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+  <parent>
+    <groupId>com.ios</groupId>
+    <artifactId>ios-pom</artifactId>
+    <version>0.0.1-SNAPSHOT</version>
+  </parent>
+  <artifactId>forward-server</artifactId>
+  <name>forward-server</name>
+
+	<dependencies>
+	    <!-- Spring Cloud Gateway -->
+	    <dependency>
+	        <groupId>org.springframework.cloud</groupId>
+	        <artifactId>spring-cloud-starter-gateway</artifactId>
+	    </dependency>
+	    
+	    <!-- ✅ 关键：Nacos 服务发现（让 Gateway 能找到服务） -->
+	    <dependency>
+	        <groupId>com.alibaba.cloud</groupId>
+	        <artifactId>spring-cloud-starter-alibaba-nacos-discovery</artifactId>
+	    </dependency>
+	    
+	    <!-- ✅ 关键：负载均衡（让 lb:// 生效） -->
+	    <dependency>
+	        <groupId>org.springframework.cloud</groupId>
+	        <artifactId>spring-cloud-starter-loadbalancer</artifactId>
+	    </dependency>
+
+	    
+	</dependencies>
+
+
+
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-maven-plugin</artifactId>
+        <executions>
+          <execution>
+            <goals>
+              <goal>repackage</goal>
+            </goals>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
+</project>

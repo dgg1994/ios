@@ -1,0 +1,166 @@
+server:
+  port: 8101
+  max-http-header-size: 2MB
+  tomcat.max-http-form-post-size: 50MB
+  compression:
+    enabled: true
+    mime-types: application/json,application/xml,text/html,text/plain # 对哪些 MIME 类型进行压缩
+    min-response-size: 1024
+
+spring:
+  application:
+    name: 17-binding-server
+  cloud:
+    nacos:
+      discovery:
+        server-addr: http://127.0.0.1:8848
+        #namespace: a5b3bd13-9c96-4216-93fb-8b077e537f46 #测试
+        namespace: 31ee03b7-c6df-436d-990d-d6c08aa5c20a #开发
+  mvc:
+    pathmatch:
+      matching-strategy: ant_path_matcher
+  servlet:
+    multipart:
+       max-file-size: 500MB
+       max-request-size: 500MB
+  jackson:
+    date-format: yyyy-MM-dd HH:mm:ss
+    time-zone: GMT+8
+    
+  datasource:
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    #url: jdbc:mysql://127.0.0.1:3306/ioslianjie?useUnicode=true&characterEncoding=utf-8&serverTimezone=GMT%2B8
+    #username: ioslianjie
+    #password: BAF4R22mwenXXxEH
+    url: jdbc:mysql://127.0.0.1:3306/ioslianjie?useUnicode=true&characterEncoding=utf-8&serverTimezone=GMT%2B8
+    username: root
+    password: Root@123
+    type: com.alibaba.druid.pool.DruidDataSource
+    initialSize: 50                # ⬆ 从30提升到50
+    minIdle: 50                    # ⬆ 从30提升到50
+    maxActive: 500                 # ⬆ 从400提升到500
+    maxWait: 60000                 # ⬇ 从100秒降到60秒
+    timeBetweenEvictionRunsMillis: 30000  # 改为30秒
+    minEvictableIdleTimeMillis: 50000     # 改为50秒（小于60秒）
+    validationQuery: SELECT 1
+    testWhileIdle: true
+    testOnBorrow: true   # 获取连接时验证，保证拿到的连接可用
+    testOnReturn: false
+    connectionErrorRetryAttempts: 3
+    breakAfterAcquireFailure: false
+
+
+  kafka:
+    bootstrap-servers: 154.82.73.206:9092
+    # 生产者配置
+    producer:
+      # 序列化
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+      # 可靠性配置
+      acks: all                         # 所有副本确认，最强可靠性
+      retries: 2147483647               # 无限重试（配合 delivery.timeout.ms）
+      # 性能配置
+      batch-size: 65536                 # 64KB
+      buffer-memory: 268435456          # 256MB
+      linger-ms: 20                     # 20ms
+      max-request-size: 1048576         # 1MB（小消息场景足够）
+      # 高级配置
+      properties:
+        # 幂等性（防止消息重复）
+        enable.idempotence: true
+        # 并发请求数（无顺序要求，可提升吞吐）
+        max.in.flight.requests.per.connection: 5
+        # 压缩（小消息压缩率高）
+        compression.type: lz4
+        # 连接配置
+        connections.max.idle.ms: 540000
+        # 超时配置
+        request.timeout.ms: 30000
+        delivery.timeout.ms: 120000
+        # 网络缓冲
+        send.buffer.bytes: 262144       # 256KB
+        receive.buffer.bytes: 65536     # 64KB
+binding:
+  dump:
+    #dir: D:/c2_records
+    dir: /opt/news4/data/apilog
+    headers-prefix: headers
+    bodies-prefix: bodies
+
+# =============================================================================
+# 【换另一套时必改】与同套 17-consume / 17-report 对齐，否则会串或消费不到
+# -----------------------------------------------------------------------------
+# kafka 通道：改 c2.kafka.topic（例 c2_records_b），consume 的 group-id 也建议不同
+# redis 通道：改下方 news4.redis-prefix / notify-stream（与 consume 相同）
+# =============================================================================
+c2:
+  record:
+    async-pool:
+      core-size: 64
+      max-size: 200
+      queue-capacity: 20000
+      keep-alive-seconds: 60
+  
+  kafka:
+    topic: c2_records_two                 # 【kafka 换套必改】与 consume / report 相同
+    async-pool:
+      core-size: 16
+      max-size: 64
+      queue-capacity: 10000
+      keep-alive-seconds: 60
+  
+  redis-stream:
+    async-pool:
+      core-size: 32
+      max-size: 128
+      queue-capacity: 10000
+      keep-alive-seconds: 60
+
+  ip-sync:
+    async-pool:
+      core-size: 32
+      max-size: 128
+      queue-capacity: 4000
+      keep-alive-seconds: 60
+  
+  telegram:
+    async-pool:
+      core-size: 8
+      max-size: 32
+      queue-capacity: 5000
+      keep-alive-seconds: 60
+
+  # 相似设备查询（IP 段 + 版本前缀 + 时间窗，c2_records 入库成功后触发）
+  similar:
+    enabled: true               # 总开关
+    ip-segments: 3              # IP 前 N 段：192.168.1.12 → "192.168.1."
+    version-segments: 2         # 版本前 N 段：ios15.1 / 15.1.2 → "15.1"
+    window-seconds: 300         # ±N 秒
+    max-results: 10            # LIMIT
+
+redis:
+  host: 127.0.0.1
+  port: 6379
+  password: ""
+  db: 0
+  timeout: 500
+  pool:
+    maxTotal: 80
+    
+
+
+# 【redis 通道换套必改】完整 key = redis-prefix + notify-stream，须与 17-consume 相同
+news4:
+  redis-prefix: 'news4:'              # 例：另一套改为 'news4b:'
+  c2:
+    notify-stream: c2:new
+    
+#消息发送方式true开启、false关闭
+pushMsg:
+   kafka: true
+   redis: false    
+    
+#飞机消息   
+telegram:
+   mornitor_bot_token: '8913549176:AAGhBJ33h_bkKXA9RfaIsB0O2djKraWUk5s'

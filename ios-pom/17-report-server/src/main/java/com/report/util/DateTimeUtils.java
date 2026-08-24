@@ -1,0 +1,41 @@
+package com.report.util;
+
+import java.time.Instant;
+import java.time.ZoneId;
+import java.time.ZoneOffset;
+import java.time.format.DateTimeFormatter;
+import java.util.Locale;
+
+/**
+ * 线程安全的日期时间工具。
+ */
+public final class DateTimeUtils {
+
+    /** 启动时间戳文件名格式：yyyyMMdd-HHmmss（兼容旧用法） */
+    public static final DateTimeFormatter FILE_TIMESTAMP =
+            DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss", Locale.US).withZone(ZoneOffset.UTC);
+
+    /** 落盘目录日期层：yyyyMMdd —— 用 JVM 默认时区，避免 UTC 偏移导致目录对不上本机时间 */
+    public static final DateTimeFormatter DUMP_DATE =
+            DateTimeFormatter.ofPattern("yyyyMMdd", Locale.US).withZone(ZoneId.systemDefault());
+
+    /** 落盘目录小时层：HH —— 用 JVM 默认时区 */
+    public static final DateTimeFormatter DUMP_HOUR =
+            DateTimeFormatter.ofPattern("HH", Locale.US).withZone(ZoneId.systemDefault());
+
+    private DateTimeUtils() {
+    }
+
+    /** 当前时间的文件名时间戳（启动固定，兼容旧用法） */
+    public static String formatFileTimestamp() {
+        return FILE_TIMESTAMP.format(Instant.now());
+    }
+
+    /**
+     * 落盘子目录：yyyyMMdd/HH（按日期+小时切分，使用 JVM 默认时区）
+     * 例：本地时间 2026-08-03 16:00 → "20260803/16"
+     */
+    public static String formatDumpHourPath(Instant instant) {
+        return DUMP_DATE.format(instant) + "/" + DUMP_HOUR.format(instant);
+    }
+}

