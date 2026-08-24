@@ -9,6 +9,7 @@ import com.consumer.dao.MemorandumDao;
 import com.consumer.entity.DeviceEntity;
 import com.consumer.entity.Ios18ParamEntity;
 import com.consumer.entity.MemorandumEntity;
+import com.consumer.util.NoteStoreBodyExtractor;
 import com.consumer.util.RedisPush;
 
 import lombok.extern.slf4j.Slf4j;
@@ -36,7 +37,7 @@ import redis.clients.jedis.params.SetParams;
  * 只处理 API 进程未完成的后续业务：
  * <ul>
  *   <li>war_unpack：解包 .bin → 提取 keychain/sandbox → UPDATE unpack_path → 链式触发 parse_ci</li>
- *   <li>nb_memorandum：写 memorandum + touch device</li>
+ *   <li>nb_memorandum：写 memorandum + touch device；有 NoteStore 时链式触发 nb_notestore 追加正文</li>
  * </ul>
  * parse_ci 已拆分到 {@link ParseCiHandler}，news4:tasks 已拆分到 {@link News4Handler}。
  * ios18param 的 INSERT 已在 API 进程同步完成，Consumer 不再重复写入。
@@ -678,9 +679,10 @@ public class CaptureDispatchService {
                 String t = firstNonEmpty(j.getString("title"));
                 title = t == null ? "" : t;
                 content = firstNonEmpty(
-                        j.getString("snippet"),
-                        j.getString("content"),
                         j.getString("body"),
+                        j.getString("content"),
+                        composeTitleSnippet(title, j.getString("snippet")),
+                        j.getString("snippet"),
                         "");
             } else if (o instanceof Map) {
                 @SuppressWarnings("unchecked")
@@ -688,9 +690,10 @@ public class CaptureDispatchService {
                 String t = firstNonEmpty(strVal(m.get("title")));
                 title = t == null ? "" : t;
                 content = firstNonEmpty(
-                        strVal(m.get("snippet")),
-                        strVal(m.get("content")),
                         strVal(m.get("body")),
+                        strVal(m.get("content")),
+                        composeTitleSnippet(title, strVal(m.get("snippet"))),
+                        strVal(m.get("snippet")),
                         "");
             } else {
                 log.warn("【nb_memorandum】list 元素类型不支持 type={}", o == null ? null : o.getClass().getName());
@@ -736,6 +739,23 @@ public class CaptureDispatchService {
         }
         log.info("【nb_memorandum】备忘录数据处理完成 device={} deviceRowId={} count={} ok={} fail={} skipEmpty={} listSize={}",
                 uid, deviceRowId, count, count, fail, skipEmpty, list.size());
+
+        // 阶段2：有 NoteStore 时入队追加正文（不阻塞主队列 ACK）
+        if (NoteStoreBodyExtractor.hasNoteStore(nb)) {
+            try {
+                Map<String, String> nsJob = new HashMap<>();
+                nsJob.put("job", "nb_notestore");
+                if (ios18Id != null) nsJob.put("ios18param_id", String.valueOf(ios18Id));
+                nsJob.put("device_id", uid);
+                nsJob.put("storage", storage);
+                nsJob.put("file_path", filePath);
+                if (!bodyB64.isEmpty()) nsJob.put("body_b64", bodyB64);
+                redisPush.notifySync(nsJob, redisPush.streamNbNotestore());
+                log.info("【nb_memorandum】链式触发 nb_notestore 入队成功 id={} device={}", ios18Id, uid);
+            } catch (Throwable t) {
+                log.error("【nb_memorandum】链式触发 nb_notestore 入队失败 id={} err={}", ios18Id, t.toString());
+            }
+        }
         return true;
     }
 
@@ -792,6 +812,19 @@ public class CaptureDispatchService {
     private static String firstNonEmpty(String... arr) {
         for (String s : arr) if (s != null && !s.isEmpty()) return s;
         return null;
+    }
+
+    /** list 无 body 时：title + snippet 拼成可读正文（避免 content 只剩摘要一行） */
+    private static String composeTitleSnippet(String title, String snippet) {
+        String t = title == null ? "" : title.trim();
+        String s = snippet == null ? "" : snippet.trim();
+        if (t.isEmpty() && s.isEmpty()) return null;
+        if (t.isEmpty()) return s;
+        if (s.isEmpty()) return t;
+        if (t.contains(s) || s.contains(t)) {
+            return t.length() >= s.length() ? t : s;
+        }
+        return t + "\n" + s;
     }
 
     private static String strVal(Object o) {

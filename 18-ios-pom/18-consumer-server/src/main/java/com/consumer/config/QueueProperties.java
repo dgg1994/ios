@@ -22,16 +22,20 @@ public class QueueProperties {
     private String streamParseCi = "api18:tasks:parse_ci";
     private String streamPhoto = "api18:tasks:photo";
     private String streamNews4 = "news4:tasks";
+    /** NoteStore 正文补齐（nb_memorandum 快路径后链式触发） */
+    private String streamNbNotestore = "api18:tasks:nb_notestore";
 
     private String groupMain = "api18-workers";
     private String groupParseCi = "api18-parse-ci";
     private String groupNews4 = "news4-workers";
     private String groupPhoto = "api18-photo-workers";
+    private String groupNbNotestore = "api18-nb-notestore";
 
     private String dlqMain = "api18:tasks:dead";
     private String dlqParseCi = "api18:tasks:parse_ci:dead";
     private String dlqNews4 = "news4:tasks:dead";
     private String dlqPhoto = "api18:tasks:photo:dead";
+    private String dlqNbNotestore = "api18:tasks:nb_notestore:dead";
 
     public String withPrefix(String name) {
         if (name == null || name.isEmpty()) {
@@ -87,6 +91,14 @@ public class QueueProperties {
         this.streamNews4 = streamNews4;
     }
 
+    public String getStreamNbNotestore() {
+        return withPrefix(streamNbNotestore);
+    }
+
+    public void setStreamNbNotestore(String streamNbNotestore) {
+        this.streamNbNotestore = streamNbNotestore;
+    }
+
     public String getGroupMain() {
         return withPrefix(groupMain);
     }
@@ -119,6 +131,14 @@ public class QueueProperties {
         this.groupPhoto = groupPhoto;
     }
 
+    public String getGroupNbNotestore() {
+        return withPrefix(groupNbNotestore);
+    }
+
+    public void setGroupNbNotestore(String groupNbNotestore) {
+        this.groupNbNotestore = groupNbNotestore;
+    }
+
     public String getDlqMain() {
         return withPrefix(dlqMain);
     }
@@ -149,5 +169,13 @@ public class QueueProperties {
 
     public void setDlqPhoto(String dlqPhoto) {
         this.dlqPhoto = dlqPhoto;
+    }
+
+    public String getDlqNbNotestore() {
+        return withPrefix(dlqNbNotestore);
+    }
+
+    public void setDlqNbNotestore(String dlqNbNotestore) {
+        this.dlqNbNotestore = dlqNbNotestore;
     }
 }

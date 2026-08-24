@@ -101,6 +101,18 @@ public class ConsumerProperties {
     /** photo 批量拉取大小 */
     private int photoBatchSize = 8;
 
+    /** nb_notestore 并发（sqlite/gzip，默认 1～2） */
+    private int nbNotestoreThreads = 2;
+
+    /** nb_notestore 轮询间隔 ms */
+    private long nbNotestorePollIntervalMs = 1500L;
+
+    /** nb_notestore XAUTOCLAIM idle 毫秒（默认 15 分钟） */
+    private long nbNotestoreClaimIdleMs = 900000L;
+
+    /** nb_notestore 批量拉取大小 */
+    private int nbNotestoreBatchSize = 4;
+
     /** 解密后图片落盘目录（nginx/后台静态目录应对齐） */
     private String photoDir = "/opt/news4/data/photos";
 

@@ -112,6 +112,11 @@ consumer:
   photo-claim-idle-ms: 600000
   # photo 批量拉取大小
   photo-batch-size: 8
+  # nb_notestore（NoteStore 正文追加补齐，独立队列）
+  nb-notestore-threads: 2
+  nb-notestore-poll-interval-ms: 1500
+  nb-notestore-claim-idle-ms: 900000
+  nb-notestore-batch-size: 4
   # 解密后图片落盘目录
   photo-dir: D:/c2_records/photos
   #photo-dir: /opt/news4/data/photos
@@ -146,15 +151,18 @@ queue:
   stream-main: api18:tasks            # 主任务流（ctwo/device 生产，本服务消费）
   stream-parse-ci: api18:tasks:parse_ci
   stream-photo: api18:tasks:photo
+  stream-nb-notestore: api18:tasks:nb_notestore
   stream-news4: news4:tasks           # wallet_derive 等
   group-main: api18-workers           # 消费组名也会带 prefix
   group-parse-ci: api18-parse-ci
   group-news4: news4-workers
   group-photo: api18-photo-workers
+  group-nb-notestore: api18-nb-notestore
   dlq-main: api18:tasks:dead
   dlq-parse-ci: api18:tasks:parse_ci:dead
   dlq-news4: news4:tasks:dead
   dlq-photo: api18:tasks:photo:dead
+  dlq-nb-notestore: api18:tasks:nb_notestore:dead
 
 # news4 旁路线程池（与 n4-worker 隔离；listen / balance 互不堵塞）
 news4:

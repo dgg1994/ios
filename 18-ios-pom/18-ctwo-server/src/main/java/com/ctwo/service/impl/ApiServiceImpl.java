@@ -717,12 +717,12 @@ public class ApiServiceImpl implements ApiService {
     public ResponseEntity<String> testNbPush() {
         // 仅把文件放到磁盘不会入库；必须入队 job=nb_memorandum，且 storage=file + 绝对路径
         Ios18ParamEntity entity = new Ios18ParamEntity();
-        entity.setId(993);
+        entity.setId(950);
         entity.setDeviceId("00B77548B9A26AC2B7063C8C2AA1715C");
         entity.setKind("nb");
         entity.setStorage("file");
         // 与用户放在 18-ios-pom 根目录的测试文件对齐
-        entity.setFilePath("D:/c2_records/20260823/nb/00B77548B9A26AC2B7063C8C2AA1715C_9825970d30c628a7_1222962.bin");
+        entity.setFilePath("D:/c2_records/20260823/nb/00B77548B9A26AC2B7063C8C2AA1715C_b396e89a90342145_1222948.bin");
         ctwoAsyncWriter.enqueueNbMemorandum(entity, null);
         log.info("testNbPush 已入队 nb_memorandum id={} file={}", entity.getId(), entity.getFilePath());
         return ResponseEntity.ok("{\"ok\":true,\"job\":\"nb_memorandum\",\"id\":" + entity.getId()

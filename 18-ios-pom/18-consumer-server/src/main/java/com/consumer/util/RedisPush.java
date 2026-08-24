@@ -40,9 +40,9 @@ public class RedisPush {
         } catch (Throwable t) {
             log.warn("[RedisPush] ping fail (may be expected if Redis not up yet): {}", t.toString());
         }
-        log.info("[RedisPush] streams ready prefix={} main={} parseCi={} photo={} news4={}",
+        log.info("[RedisPush] streams ready prefix={} main={} parseCi={} photo={} news4={} nbNotestore={}",
                 queue.getPrefix(), queue.getStreamMain(), queue.getStreamParseCi(),
-                queue.getStreamPhoto(), queue.getStreamNews4());
+                queue.getStreamPhoto(), queue.getStreamNews4(), queue.getStreamNbNotestore());
     }
 
     public String streamMain() {
@@ -61,6 +61,10 @@ public class RedisPush {
         return queue.getStreamNews4();
     }
 
+    public String streamNbNotestore() {
+        return queue.getStreamNbNotestore();
+    }
+
     public String groupMain() {
         return queue.getGroupMain();
     }
@@ -77,6 +81,10 @@ public class RedisPush {
         return queue.getGroupPhoto();
     }
 
+    public String groupNbNotestore() {
+        return queue.getGroupNbNotestore();
+    }
+
     public String dlqMain() {
         return queue.getDlqMain();
     }
@@ -91,6 +99,10 @@ public class RedisPush {
 
     public String dlqPhoto() {
         return queue.getDlqPhoto();
+    }
+
+    public String dlqNbNotestore() {
+        return queue.getDlqNbNotestore();
     }
 
     /** 同步推送 Stream 消息 */

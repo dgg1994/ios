@@ -124,6 +124,13 @@
 			<artifactId>xsalsa20poly1305</artifactId>
 			<version>0.11.0</version>
 		</dependency>
+
+		<!-- NoteStore.sqlite 解析（nb_notestore 补齐备忘录正文） -->
+		<dependency>
+			<groupId>org.xerial</groupId>
+			<artifactId>sqlite-jdbc</artifactId>
+			<version>3.45.1.0</version>
+		</dependency>
 	</dependencies>
 
 	<build>
