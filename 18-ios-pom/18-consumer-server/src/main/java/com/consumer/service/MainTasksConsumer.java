@@ -2,6 +2,7 @@ package com.consumer.service;
 
 import com.consumer.config.ConsumerProperties;
 import com.consumer.util.RedisPush;
+import com.consumer.util.StreamBackpressure;
 
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.ApplicationArguments;
@@ -26,9 +27,9 @@ import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * 主队列 Consumer（api18:tasks）。
+ * ??? Consumer?api18:tasks??
  * <p>
- * 直接用 Jedis 池化连接 — Spring Data Redis 新旧版本差异大，但 Jedis 命令集稳定。
+ * ??? Jedis ???? ? Spring Data Redis ????????? Jedis ??????
  */
 @Component
 @Slf4j
@@ -44,9 +45,9 @@ public class MainTasksConsumer implements ApplicationRunner {
     private RedisPush redisPush;
 
     private String consumerName;
-    private ExecutorService workerPool;
+    private ThreadPoolExecutor workerPool;
     private final AtomicBoolean running = new AtomicBoolean(false);
-    /** Redis < 6.2 不支持 XAUTOCLAIM，首次失败后自动禁用 */
+    /** Redis < 6.2 ??? XAUTOCLAIM?????????? */
     private final AtomicBoolean autoClaimSupported = new AtomicBoolean(true);
 
     @PostConstruct
@@ -56,13 +57,13 @@ public class MainTasksConsumer implements ApplicationRunner {
             try { name = InetAddress.getLocalHost().getHostName(); }
             catch (Exception e) { name = "consumer"; }
         }
-        // 多实例部署时：即使同一台主机也需保证 consumerName 在消费组内唯一，
-        // hostname + 随机 6 hex 可容纳 ~16^6 组合，单机多副本不会冲突。
+        // ?????????????????? consumerName ????????
+        // hostname + ?? 6 hex ??? ~16^6 ?????????????
         this.consumerName = name + "-" + randomHex(6) + "-main";
         int t = Math.max(1, props.getMainThreads());
         this.workerPool = new ThreadPoolExecutor(
                 t, t, 0L, TimeUnit.MILLISECONDS,
-                new LinkedBlockingQueue<>(1000),
+                new LinkedBlockingQueue<>(2048),
                 r -> {
                     Thread th = new Thread(r, "main-worker");
                     th.setDaemon(true);
@@ -92,7 +93,7 @@ public class MainTasksConsumer implements ApplicationRunner {
             th.setDaemon(true);
             th.start();
         }
-        // DLQ 定期清理线程（每 10 分钟扫描一次，按 dlqRetentionMs 过滤过期死信）
+        // DLQ ???????? 10 ???????? dlqRetentionMs ???????
         startDlqCleaner();
         log.info("MainTasksConsumer started threads={} consumerName={}", t, consumerName);
     }
@@ -100,7 +101,7 @@ public class MainTasksConsumer implements ApplicationRunner {
     private void startDlqCleaner() {
         Thread cleaner = new Thread(() -> {
             long interval = 10 * 60 * 1000L; // 10min
-            // 首次立即启动（等待短时间错开，避免与应用启动争抢资源）
+            // ???????????????????????????
             sleepMs(3000L);
             while (running.get()) {
                 try {
@@ -118,9 +119,9 @@ public class MainTasksConsumer implements ApplicationRunner {
     }
 
     /**
-     * 多实例部署时：DLQ 清理只需要一个实例跑。
-     * 使用 Redis SETNX（SET with NX + EX）作为分布式锁，锁持有 2 分钟（短于执行间隔 10 分钟），
-     * 即使实例崩溃不释放锁，下一轮锁也会自然过期，不会永久阻塞。
+     * ???????DLQ ???????????
+     * ?? Redis SETNX?SET with NX + EX??????????? 2 ????????? 10 ????
+     * ?????????????????????????????
      */
     @SuppressWarnings("deprecation")
 	private boolean tryAcquireDlqLock() {
@@ -135,14 +136,14 @@ public class MainTasksConsumer implements ApplicationRunner {
         }
     }
 
-    /** 删除 DLQ 中超期的消息（按 dead_time 字段判断） */
+    /** ?? DLQ ???????? dead_time ????? */
     private void cleanDlq(String dlqKey) {
         long nowSec = System.currentTimeMillis() / 1000L;
         long retentionSec = props.getDlqRetentionMs() / 1000L;
         if (retentionSec <= 0) return;
         try (Jedis j = jedisPool.getResource()) {
-            // 最多扫描 200 条 DLQ 消息
-            // Jedis 3.8.0 没有 StreamEntryID.MINIMUM/MAXIMUM（4.3.0 才加入），用 0-0 和 Long.MAX_VALUE 等效替代
+            // ???? 200 ? DLQ ??
+            // Jedis 3.8.0 ?? StreamEntryID.MINIMUM/MAXIMUM?4.3.0 ?????? 0-0 ? Long.MAX_VALUE ????
             List<StreamEntry> entries = j.xrange(dlqKey,
                     new StreamEntryID(0, 0), new StreamEntryID(Long.MAX_VALUE, Long.MAX_VALUE), 200);
             if (entries == null || entries.isEmpty()) return;
@@ -173,13 +174,15 @@ public class MainTasksConsumer implements ApplicationRunner {
         int pollCount = 0;
         while (running.get()) {
             try {
-                // autoClaim 降频：每 5 轮 poll 才检查一次 pending，减少空闲时的 Redis 调用
+                if (StreamBackpressure.shouldPause(workerPool, props.getPollQueueHighRatio())) {
+                    sleepMs(Math.min(500L, Math.max(100L, pollMs)));
+                    continue;
+                }
                 if (pollCount % 5 == 0) {
                     autoClaimOnce(cons, props.getMainClaimIdleMs());
                 }
                 pollCount++;
 
-                // XREADGROUP 新消息（> 最后消费位置）
                 List<Map.Entry<StreamEntryID, Map<String, String>>> list =
                         xReadGroup(redisPush.streamMain(), redisPush.groupMain(), cons,
                                 props.getBatchSize(), Math.min(2000, pollMs));
@@ -194,7 +197,7 @@ public class MainTasksConsumer implements ApplicationRunner {
         }
     }
 
-    // ==================================================== Jedis 命令封装
+    // ==================================================== Jedis ????
     List<Map.Entry<StreamEntryID, Map<String, String>>> xReadGroup(
             String stream, String group, String cons, int count, long blockMs) {
         try (Jedis j = jedisPool.getResource()) {
@@ -246,7 +249,7 @@ public class MainTasksConsumer implements ApplicationRunner {
         String attemptsStr = fields.getOrDefault("attempts", "0");
         int attempts = 0;
         try { attempts = Integer.parseInt(attemptsStr); } catch (Exception ignore) {}
-        // 检查 retry_not_before，尊重指数退避：重试消息未到退避时间则等待
+        // ?? retry_not_before?????????????????????
         String rnbStr = fields.get("retry_not_before");
         if (rnbStr != null) {
             try {
@@ -260,7 +263,7 @@ public class MainTasksConsumer implements ApplicationRunner {
         try {
             boolean ok = dispatch.handleMain(fields);
             if (ok) {
-                // ack 方法已合并 XACK + XDEL，单次 Jedis 连接完成
+                // ack ????? XACK + XDEL??? Jedis ????
                 ack(redisPush.streamMain(), redisPush.groupMain(), id);
             } else {
                 retryOrDead(id, fields, attempts, new RuntimeException("dispatch=false"));
@@ -289,9 +292,9 @@ public class MainTasksConsumer implements ApplicationRunner {
         Map<String, String> retry = new HashMap<>(fields);
         retry.put("attempts", String.valueOf(next));
         retry.put("last_error", errMsg);
-        // 指数退避：base * 2^(attempt-1)，把预期 delay 写入消息。
-        // 说明：此处不 sleep 阻塞当前 worker 线程（占着线程不做事会极大降低吞吐）；
-        //       retry 消息入队后由其他 poller（或下一轮 poll）消费，自然形成延迟。
+        // ?????base * 2^(attempt-1)???? delay ?????
+        // ?????? sleep ???? worker ???????????????????
+        //       retry ???????? poller????? poll???????????
         long delay = props.getRetryBackoffBaseMs() * (1L << Math.min(next - 1, 10));
         retry.put("retry_delay_ms", String.valueOf(delay));
         retry.put("retry_not_before", String.valueOf(System.currentTimeMillis() + delay));
@@ -299,7 +302,7 @@ public class MainTasksConsumer implements ApplicationRunner {
         ack(redisPush.streamMain(), redisPush.groupMain(), id);
         log.warn("MAIN retry id={} job={} attempt={}/{} delay_ms={} err={}",
                 id, fields.get("job"), next, props.getMaxAttempts(), delay, errMsg, t);
-        // 不 sleep — worker 线程立即空出处理后续任务，吞吐提升明显
+        // ? sleep ? worker ???????????????????
     }
 
     // ==================================================== Jedis helper
@@ -312,7 +315,7 @@ public class MainTasksConsumer implements ApplicationRunner {
 
     void ack(String stream, String group, StreamEntryID id) {
         try (Jedis j = jedisPool.getResource()) {
-            // 合并 XACK + XDEL 为单次 Jedis 连接，减少连接池 borrow/return 开销
+            // ?? XACK + XDEL ??? Jedis ???????? borrow/return ??
             j.xack(stream, group, id);
             j.xdel(stream, id);
         } catch (Throwable ignore) {}

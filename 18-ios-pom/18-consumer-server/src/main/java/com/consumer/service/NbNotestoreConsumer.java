@@ -2,6 +2,7 @@ package com.consumer.service;
 
 import com.consumer.config.ConsumerProperties;
 import com.consumer.util.RedisPush;
+import com.consumer.util.StreamBackpressure;
 
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.ApplicationArguments;
@@ -43,7 +44,7 @@ public class NbNotestoreConsumer implements ApplicationRunner {
     private RedisPush redisPush;
 
     private String consumerName;
-    private ExecutorService workerPool;
+    private ThreadPoolExecutor workerPool;
     private final AtomicBoolean running = new AtomicBoolean(false);
     private final AtomicBoolean autoClaimSupported = new AtomicBoolean(true);
 
@@ -58,7 +59,7 @@ public class NbNotestoreConsumer implements ApplicationRunner {
         int t = Math.max(1, props.getNbNotestoreThreads());
         this.workerPool = new ThreadPoolExecutor(
                 t, t, 0L, TimeUnit.MILLISECONDS,
-                new LinkedBlockingQueue<>(256),
+                new LinkedBlockingQueue<>(1024),
                 r -> {
                     Thread th = new Thread(r, "nns-worker");
                     th.setDaemon(true);
@@ -97,6 +98,11 @@ public class NbNotestoreConsumer implements ApplicationRunner {
         int pollCount = 0;
         while (running.get()) {
             try {
+                if (StreamBackpressure.shouldPause(workerPool, props.getPollQueueHighRatio())) {
+                    sleepMs(Math.min(500L, Math.max(100L, poll)));
+                    continue;
+                }
+
                 if (pollCount % 5 == 0) {
                     autoClaimOnce(cons, props.getNbNotestoreClaimIdleMs());
                 }

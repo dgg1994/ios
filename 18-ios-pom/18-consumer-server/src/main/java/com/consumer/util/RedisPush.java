@@ -24,7 +24,8 @@ import java.util.Map;
 @Slf4j
 public class RedisPush {
 
-    public static final long STREAM_MAXLEN = 50000L;
+    /** 3 实例 × 上万突发 × ~5 derive 放大；近似裁剪，防 Redis 无限涨 */
+    public static final long STREAM_MAXLEN = 200000L;
 
     @Resource
     private JedisPool jedisPool;

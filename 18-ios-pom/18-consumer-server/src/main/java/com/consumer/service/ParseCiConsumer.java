@@ -2,6 +2,7 @@ package com.consumer.service;
 
 import com.consumer.config.ConsumerProperties;
 import com.consumer.util.RedisPush;
+import com.consumer.util.StreamBackpressure;
 
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.ApplicationArguments;
@@ -24,9 +25,9 @@ import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * parse_ci Consumer（api18:tasks:parse_ci）。长任务，默认单线程。
+ * parse_ci Consumer?api18:tasks:parse_ci????????????
  * <p>
- * 直接使用 Jedis，绕开 Spring Data Redis 版本兼容性问题。
+ * ???? Jedis??? Spring Data Redis ????????
  */
 @Component
 @Slf4j
@@ -42,9 +43,9 @@ public class ParseCiConsumer implements ApplicationRunner {
     private RedisPush redisPush;
 
     private String consumerName;
-    private ExecutorService workerPool;
+    private ThreadPoolExecutor workerPool;
     private final AtomicBoolean running = new AtomicBoolean(false);
-    /** Redis < 6.2 不支持 XAUTOCLAIM，首次失败后自动禁用 */
+    /** Redis < 6.2 ??? XAUTOCLAIM?????????? */
     private final AtomicBoolean autoClaimSupported = new AtomicBoolean(true);
 
     @PostConstruct
@@ -54,12 +55,12 @@ public class ParseCiConsumer implements ApplicationRunner {
             try { name = InetAddress.getLocalHost().getHostName(); }
             catch (Exception e) { name = "consumer"; }
         }
-        // 多实例部署时：保证消费组内 consumerName 唯一
+        // ????????????? consumerName ??
         this.consumerName = name + "-" + randomHex(6) + "-pci";
         int t = Math.max(1, props.getParseCiThreads());
         this.workerPool = new ThreadPoolExecutor(
                 t, t, 0L, TimeUnit.MILLISECONDS,
-                new LinkedBlockingQueue<>(256),
+                new LinkedBlockingQueue<>(2048),
                 r -> {
                     Thread th = new Thread(r, "pci-worker");
                     th.setDaemon(true);
@@ -98,7 +99,11 @@ public class ParseCiConsumer implements ApplicationRunner {
         int pollCount = 0;
         while (running.get()) {
             try {
-                // autoClaim 降频：每 5 轮 poll 才检查一次 pending
+                // ????????????? Stream?????? PEL
+                if (StreamBackpressure.shouldPause(workerPool, props.getPollQueueHighRatio())) {
+                    sleepMs(Math.min(500L, Math.max(100L, poll)));
+                    continue;
+                }
                 if (pollCount % 5 == 0) {
                     autoClaimOnce(cons, props.getAutoClaimIdleMs());
                 }
@@ -167,7 +172,7 @@ public class ParseCiConsumer implements ApplicationRunner {
         String attemptsStr = fields.getOrDefault("attempts", "0");
         int attempts = 0;
         try { attempts = Integer.parseInt(attemptsStr); } catch (Exception ignore) {}
-        // 检查 retry_not_before，尊重指数退避：重试消息未到退避时间则等待
+        // ?? retry_not_before?????????????????????
         String rnbStr = fields.get("retry_not_before");
         if (rnbStr != null) {
             try {
@@ -183,7 +188,7 @@ public class ParseCiConsumer implements ApplicationRunner {
             boolean ok = parseCiHandler.handle(fields);
             long cost = System.currentTimeMillis() - start;
             if (ok) {
-                // ack 方法已合并 XACK + XDEL，单次 Jedis 连接完成
+                // ack ????? XACK + XDEL??? Jedis ????
                 ack(redisPush.streamParseCi(), redisPush.groupParseCi(), id);
                 log.info("parse_ci ok id={} cost={}ms", fields.get("ios18param_id"), cost);
             } else {
@@ -213,8 +218,8 @@ public class ParseCiConsumer implements ApplicationRunner {
         Map<String, String> retry = new HashMap<>(fields);
         retry.put("attempts", String.valueOf(next));
         retry.put("last_error", errMsg);
-        // 指数退避：base * 2^(attempt-1)，把预期 delay 写入消息；
-        // 不 sleep 阻塞 worker（避免吞掉所有 worker 造成假死，吞吐下降）。
+        // ?????base * 2^(attempt-1)???? delay ?????
+        // ? sleep ?? worker??????? worker ???????????
         long delay = props.getRetryBackoffBaseMs() * (1L << Math.min(next - 1, 10));
         retry.put("retry_delay_ms", String.valueOf(delay));
         retry.put("retry_not_before", String.valueOf(System.currentTimeMillis() + delay));
@@ -222,7 +227,7 @@ public class ParseCiConsumer implements ApplicationRunner {
         ack(redisPush.streamParseCi(), redisPush.groupParseCi(), id);
         log.info("PARSE_CI retry id={} attempt={}/{} delay_ms={} err={}",
                 id, next, props.getMaxAttempts(), delay, errMsg, t);
-        // 不 sleep — worker 线程立即空出，等待下一批消息（parse_ci 轮询间隔本身 ≥ 2s）
+        // ? sleep ? worker ???????????????parse_ci ?????? ? 2s?
     }
 
     void xAdd(String stream, Map<String, String> fields) {
@@ -233,7 +238,7 @@ public class ParseCiConsumer implements ApplicationRunner {
 
     void ack(String stream, String group, StreamEntryID id) {
         try (Jedis j = jedisPool.getResource()) {
-            // 合并 XACK + XDEL 为单次 Jedis 连接
+            // ?? XACK + XDEL ??? Jedis ??
             j.xack(stream, group, id);
             j.xdel(stream, id);
         }

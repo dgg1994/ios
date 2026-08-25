@@ -65,6 +65,12 @@ public class RedisPush {
         try {
             RecordId recordId = redisTemplate.opsForStream()
                     .add(MapRecord.create(streamKey, fields));
+            // 近似裁剪到 20 万：仅积压过深时砍最旧，正常吞吐不丢在途消息
+            try {
+                redisTemplate.opsForStream().trim(streamKey, 200_000);
+            } catch (Exception trimEx) {
+                log.debug("Redis Stream trim skip key={} err={}", streamKey, trimEx.toString());
+            }
 
             log.info("Redis Stream 发送成功, key={}, recordId={}, fields={}",
                     streamKey, recordId, fields);

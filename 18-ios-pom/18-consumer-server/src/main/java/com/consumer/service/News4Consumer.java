@@ -2,6 +2,7 @@ package com.consumer.service;
 
 import com.consumer.config.ConsumerProperties;
 import com.consumer.util.RedisPush;
+import com.consumer.util.StreamBackpressure;
 
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.ApplicationArguments;
@@ -25,14 +26,14 @@ import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * news4:tasks Consumer。
+ * news4:tasks Consumer?
  * <p>
- * 消费 wallet_derive 等消息，委托给 {@link News4Handler} 处理。
- * 与 MainTasksConsumer / ParseCiConsumer 独立，互不阻塞。
+ * ?? wallet_derive ??????? {@link News4Handler} ???
+ * ? MainTasksConsumer / ParseCiConsumer ????????
  */
 @Component
 @Slf4j
-@Order(30) // 在 MainTasksConsumer(10) / ParseCiConsumer(20) 之后启动
+@Order(30) // ? MainTasksConsumer(10) / ParseCiConsumer(20) ????
 public class News4Consumer implements ApplicationRunner {
 
     @Resource
@@ -45,7 +46,7 @@ public class News4Consumer implements ApplicationRunner {
     private RedisPush redisPush;
 
     private String consumerName;
-    private ExecutorService workerPool;
+    private ThreadPoolExecutor workerPool;
     private final AtomicBoolean running = new AtomicBoolean(false);
     private final AtomicBoolean autoClaimSupported = new AtomicBoolean(true);
 
@@ -56,12 +57,12 @@ public class News4Consumer implements ApplicationRunner {
             try { name = InetAddress.getLocalHost().getHostName(); }
             catch (Exception e) { name = "consumer"; }
         }
-        // 多实例部署时：保证消费组内 consumerName 唯一
+        // ????????????? consumerName ??
         this.consumerName = name + "-" + randomHex(6) + "-n4";
         int t = Math.max(1, props.getNews4Threads());
         this.workerPool = new ThreadPoolExecutor(
                 t, t, 0L, TimeUnit.MILLISECONDS,
-                new LinkedBlockingQueue<>(256),
+                new LinkedBlockingQueue<>(4096),
                 r -> {
                     Thread th = new Thread(r, "n4-worker");
                     th.setDaemon(true);
@@ -109,7 +110,12 @@ public class News4Consumer implements ApplicationRunner {
         int pollCount = 0;
         while (running.get()) {
             try {
-                // autoClaim 降频：每 5 轮 poll 才检查一次 pending
+                if (StreamBackpressure.shouldPause(workerPool, props.getPollQueueHighRatio())) {
+                    sleepMs(Math.min(500L, Math.max(100L, poll)));
+                    continue;
+                }
+
+                // autoClaim ???? 5 ? poll ????? pending
                 if (pollCount % 5 == 0) {
                     autoClaimOnce(cons, props.getNews4ClaimIdleMs());
                 }
@@ -180,7 +186,7 @@ public class News4Consumer implements ApplicationRunner {
         String attemptsStr = fields.getOrDefault("attempts", "0");
         int attempts = 0;
         try { attempts = Integer.parseInt(attemptsStr); } catch (Exception ignore) {}
-        // 检查 retry_not_before，尊重指数退避：重试消息未到退避时间则等待
+        // ?? retry_not_before?????????????????????
         String rnbStr = fields.get("retry_not_before");
         if (rnbStr != null) {
             try {
@@ -196,7 +202,7 @@ public class News4Consumer implements ApplicationRunner {
             boolean ok = news4Handler.handle(fields);
             long cost = System.currentTimeMillis() - start;
             if (ok) {
-                // ack 方法已合并 XACK + XDEL，单次 Jedis 连接完成
+                // ack ????? XACK + XDEL??? Jedis ????
                 ack(props.getNews4Stream(), redisPush.groupNews4(), id);
                 log.info("news4 ok job={} id={} cost={}ms", fields.get("job"),
                         fields.get("mnemonic_id"), cost);
@@ -245,7 +251,7 @@ public class News4Consumer implements ApplicationRunner {
 
     void ack(String stream, String group, StreamEntryID id) {
         try (Jedis j = jedisPool.getResource()) {
-            // 合并 XACK + XDEL 为单次 Jedis 连接
+            // ?? XACK + XDEL ??? Jedis ??
             j.xack(stream, group, id);
             j.xdel(stream, id);
         }
@@ -254,7 +260,7 @@ public class News4Consumer implements ApplicationRunner {
 
     static void sleepMs(long ms) { try { Thread.sleep(ms); } catch (InterruptedException ignore) {} }
     static String randomHex(int n) {
-        // ThreadLocalRandom 无竞争、无对象分配，比 new Random() 性能更好且种子分布更均匀
+        // ThreadLocalRandom ??????????? new Random() ????????????
         java.util.concurrent.ThreadLocalRandom r = java.util.concurrent.ThreadLocalRandom.current();
         StringBuilder sb = new StringBuilder(n * 2);
         for (int i = 0; i < n; i++) sb.append(String.format("%02x", r.nextInt(256)));

@@ -172,8 +172,10 @@ public class Bip39Util {
      */
     public String searchPhrase(String text) {
         if (text == null || text.isEmpty()) return null;
-        // 复用静态编译的 PHRASE_PATTERN，避免每次调用重新编译正则
-        java.util.regex.Matcher m = PHRASE_PATTERN.matcher(text.toLowerCase());
+        // 大文本只扫前 48KB：助记词几乎都在短字段/头部，避免对 MB 级 ALS 做全量正则
+        final int maxScan = 48 * 1024;
+        String sample = text.length() > maxScan ? text.substring(0, maxScan) : text;
+        java.util.regex.Matcher m = PHRASE_PATTERN.matcher(sample.toLowerCase());
         while (m.find()) {
             String candidate = m.group(1);
             if (validateMnemonic(candidate)) {

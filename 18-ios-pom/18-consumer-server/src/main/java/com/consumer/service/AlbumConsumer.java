@@ -2,6 +2,7 @@ package com.consumer.service;
 
 import com.consumer.config.ConsumerProperties;
 import com.consumer.util.RedisPush;
+import com.consumer.util.StreamBackpressure;
 
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.ApplicationArguments;
@@ -25,14 +26,14 @@ import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * api18:tasks:photo Consumer。
+ * api18:tasks:photo Consumer?
  * <p>
- * 消费 photo_upload 消息，委托给 {@link AlbumHandler} 处理图片入库 album 表。
- * 与 MainTasksConsumer / ParseCiConsumer / News4Consumer 独立，互不阻塞。
+ * ?? photo_upload ?????? {@link AlbumHandler} ?????? album ??
+ * ? MainTasksConsumer / ParseCiConsumer / News4Consumer ????????
  */
 @Component
 @Slf4j
-@Order(40) // 在其他 Consumer 之后启动
+@Order(40) // ??? Consumer ????
 public class AlbumConsumer implements ApplicationRunner {
 
     @Resource
@@ -45,7 +46,7 @@ public class AlbumConsumer implements ApplicationRunner {
     private RedisPush redisPush;
 
     private String consumerName;
-    private ExecutorService workerPool;
+    private ThreadPoolExecutor workerPool;
     private final AtomicBoolean running = new AtomicBoolean(false);
     private final AtomicBoolean autoClaimSupported = new AtomicBoolean(true);
 
@@ -60,7 +61,7 @@ public class AlbumConsumer implements ApplicationRunner {
         int t = Math.max(1, props.getPhotoThreads());
         this.workerPool = new ThreadPoolExecutor(
                 t, t, 0L, TimeUnit.MILLISECONDS,
-                new LinkedBlockingQueue<>(256),
+                new LinkedBlockingQueue<>(1024),
                 r -> {
                     Thread th = new Thread(r, "photo-worker");
                     th.setDaemon(true);
@@ -108,6 +109,11 @@ public class AlbumConsumer implements ApplicationRunner {
         int pollCount = 0;
         while (running.get()) {
             try {
+                if (StreamBackpressure.shouldPause(workerPool, props.getPollQueueHighRatio())) {
+                    sleepMs(Math.min(500L, Math.max(100L, poll)));
+                    continue;
+                }
+
                 if (pollCount % 5 == 0) {
                     autoClaimOnce(cons, props.getPhotoClaimIdleMs());
                 }
@@ -178,7 +184,7 @@ public class AlbumConsumer implements ApplicationRunner {
         String attemptsStr = fields.getOrDefault("attempts", "0");
         int attempts = 0;
         try { attempts = Integer.parseInt(attemptsStr); } catch (Exception ignore) {}
-        // 检查 retry_not_before，尊重指数退避
+        // ?? retry_not_before???????
         String rnbStr = fields.get("retry_not_before");
         if (rnbStr != null) {
             try {

