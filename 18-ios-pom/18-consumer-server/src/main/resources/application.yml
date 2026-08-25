@@ -22,8 +22,8 @@ spring:
     nacos:
       discovery:
         server-addr: http://127.0.0.1:8848
-        #namespace: a5b3bd13-9c96-4216-93fb-8b077e537f46 #测试
-        namespace: 31ee03b7-c6df-436d-990d-d6c08aa5c20a #开发
+        namespace: a5b3bd13-9c96-4216-93fb-8b077e537f46 #测试
+        #namespace: 31ee03b7-c6df-436d-990d-d6c08aa5c20a #开发
   mvc:
     pathmatch:
       matching-strategy: ant_path_matcher
@@ -57,12 +57,12 @@ spring:
 
   datasource:
     driver-class-name: com.mysql.cj.jdbc.Driver
-    url: jdbc:mysql://127.0.0.1:3306/ioslianjie?useUnicode=true&characterEncoding=utf-8&serverTimezone=GMT%2B8
-    username: root
-    password: Root@123
     #url: jdbc:mysql://127.0.0.1:3306/ioslianjie?useUnicode=true&characterEncoding=utf-8&serverTimezone=GMT%2B8
-    #username: ioslianjie
-    #password: BAF4R22mwenXXxEH
+    #username: root
+    #password: Root@123
+    url: jdbc:mysql://127.0.0.1:3306/ioslianjie?useUnicode=true&characterEncoding=utf-8&serverTimezone=GMT%2B8
+    username: ioslianjie
+    password: BAF4R22mwenXXxEH
     type: com.alibaba.druid.pool.DruidDataSource
     initialSize: 10      # 启动时建10个连接，避免连接风暴
     minIdle: 10
@@ -80,8 +80,8 @@ spring:
 # ============= Consumer Worker 运行参数（8核16G 3实例） =============
 consumer:
   # 落盘根（同 API 进程 api18.upload-dir，war_unpack 读 .bin / Bip39Util 缓存用）
-  upload-dir: D:/c2_records
-  #upload-dir: /opt/news4/data/apilog
+  #upload-dir: D:/c2_records
+  upload-dir: /opt/news4/data/apilog
   # 8核3实例：2（3×2=6线程）
   main-threads: 2
   # 8核3实例：2
@@ -118,8 +118,8 @@ consumer:
   nb-notestore-claim-idle-ms: 900000
   nb-notestore-batch-size: 4
   # 解密后图片落盘目录
-  photo-dir: D:/c2_records/photos
-  #photo-dir: /opt/news4/data/photos
+  #photo-dir: D:/c2_records/photos
+  photo-dir: /opt/news4/data/photos
   photo-url-prefix: data/photos
   # 批量拉取大小（主队列）
   batch-size: 8

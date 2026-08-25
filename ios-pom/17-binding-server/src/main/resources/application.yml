@@ -14,8 +14,8 @@ spring:
     nacos:
       discovery:
         server-addr: http://127.0.0.1:8848
-        #namespace: a5b3bd13-9c96-4216-93fb-8b077e537f46 #测试
-        namespace: 31ee03b7-c6df-436d-990d-d6c08aa5c20a #开发
+        namespace: a5b3bd13-9c96-4216-93fb-8b077e537f46 #测试
+        #namespace: 31ee03b7-c6df-436d-990d-d6c08aa5c20a #开发
   mvc:
     pathmatch:
       matching-strategy: ant_path_matcher
@@ -29,12 +29,12 @@ spring:
     
   datasource:
     driver-class-name: com.mysql.cj.jdbc.Driver
-    #url: jdbc:mysql://127.0.0.1:3306/ioslianjie?useUnicode=true&characterEncoding=utf-8&serverTimezone=GMT%2B8
-    #username: ioslianjie
-    #password: BAF4R22mwenXXxEH
     url: jdbc:mysql://127.0.0.1:3306/ioslianjie?useUnicode=true&characterEncoding=utf-8&serverTimezone=GMT%2B8
-    username: root
-    password: Root@123
+    username: ioslianjie
+    password: BAF4R22mwenXXxEH
+    #url: jdbc:mysql://127.0.0.1:3306/ioslianjie?useUnicode=true&characterEncoding=utf-8&serverTimezone=GMT%2B8
+    #username: root
+    #password: Root@123
     type: com.alibaba.druid.pool.DruidDataSource
     initialSize: 50                # ⬆ 从30提升到50
     minIdle: 50                    # ⬆ 从30提升到50
@@ -103,7 +103,7 @@ c2:
       keep-alive-seconds: 60
   
   kafka:
-    topic: c2_records_two                 # 【kafka 换套必改】与 consume / report 相同
+    topic: c2_records               # 【kafka 换套必改】与 consume / report 相同
     async-pool:
       core-size: 16
       max-size: 64

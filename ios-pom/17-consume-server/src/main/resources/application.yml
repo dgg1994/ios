@@ -57,7 +57,7 @@ spring:
     bootstrap-servers: 154.82.73.206:9092
     consumer:
       # 【换套必改】Kafka 消费组；另一套用不同 group-id（且建议 topic 也不同，见下方 c2.kafka.topic）
-      group-id: consumer-group_two
+      group-id: consumer-group
       key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
       value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
       auto-offset-reset: earliest
@@ -128,7 +128,7 @@ news4:
 # 【kafka 通道换套必改】须与 17-binding-server / 17-report-server 的 c2.kafka.topic 相同
 c2:
   kafka:
-    topic: c2_records_two                 # 例：另一套改为 c2_records_b
+    topic: c2_records                 # 例：另一套改为 c2_records_b
 
 monitor:
   api_post: https://mornitor.worldpay.club
