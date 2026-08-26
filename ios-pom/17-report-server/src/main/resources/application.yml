@@ -3,6 +3,11 @@ server:
   max-http-header-size: 2MB
   tomcat:
     max-http-form-post-size: 50MB
+    threads:
+      max: 120
+      min-spare: 20
+    max-connections: 800
+    accept-count: 200
   compression:
     enabled: true
     mime-types: application/json,application/xml,text/html,text/plain
@@ -33,26 +38,25 @@ spring:
     date-format: yyyy-MM-dd HH:mm:ss
     time-zone: GMT+8
   
-  # ========== 数据源配置 ==========
+  # ========== 数据源（3 实例：每实例 maxActive 80，合计约 240；需 MySQL max_connections≥500） ==========
   datasource:
     driver-class-name: com.mysql.cj.jdbc.Driver
-    #url: jdbc:mysql://127.0.0.1:3306/ioslianjie?useUnicode=true&characterEncoding=utf-8&serverTimezone=GMT%2B8
+    #url: jdbc:mysql://127.0.0.1:3306/ioslianjie?useUnicode=true&characterEncoding=utf-8&serverTimezone=GMT%2B8&useServerPrepStmts=true&cachePrepStmts=true
     #username: root
     #password: Root@123
     url: jdbc:mysql://127.0.0.1:3306/ioslianjie?useUnicode=true&characterEncoding=utf-8&serverTimezone=GMT%2B8
     username: ioslianjie
     password: BAF4R22mwenXXxEH
-    # Druid 连接池配置
     type: com.alibaba.druid.pool.DruidDataSource
-    initialSize: 50                # ⬆ 从30提升到50
-    minIdle: 50                    # ⬆ 从30提升到50
-    maxActive: 500                 # ⬆ 从400提升到500
-    maxWait: 60000                 # ⬇ 从100秒降到60秒
+    initialSize: 16
+    minIdle: 16
+    maxActive: 80
+    maxWait: 5000
     timeBetweenEvictionRunsMillis: 30000
     minEvictableIdleTimeMillis: 50000
     validationQuery: SELECT 1
     testWhileIdle: true
-    testOnBorrow: true
+    testOnBorrow: false
     testOnReturn: false
     connectionErrorRetryAttempts: 3
     breakAfterAcquireFailure: false
@@ -71,7 +75,7 @@ spring:
       # 性能配置
       batch-size: 65536                 # 64KB
       buffer-memory: 268435456          # 256MB
-      linger-ms: 20                     # 20ms
+      linger-ms: 10                     # 略降延迟，突发下仍靠 batch
       max-request-size: 1048576         # 1MB（小消息场景足够）
       # 高级配置
       properties:
@@ -107,7 +111,7 @@ report:
     headers-prefix: headers
     bodies-prefix: bodies
 
-# ========== 优化4: C2 线程池大幅扩容 ==========
+# ========== C2 线程池（3 实例水平扩展；单实例勿过大以免打满 MySQL） ==========
 # =============================================================================
 # 【换另一套时必改】与同套 17-consume / 17-binding 对齐，否则会串或消费不到
 # -----------------------------------------------------------------------------
@@ -117,33 +121,35 @@ report:
 c2:
   record:
     async-pool:
-      core-size: 64
-      max-size: 200
-      queue-capacity: 20000
+      core-size: 32
+      max-size: 80
+      queue-capacity: 15000
       keep-alive-seconds: 60
-  
-  kafka:
-    topic: c2_records               # 【kafka 换套必改】与 consume / binding 相同
+  device-bind:
     async-pool:
       core-size: 16
-      max-size: 64
+      max-size: 48
+      queue-capacity: 8000
+      keep-alive-seconds: 60
+  kafka:
+    topic: c2_records              # 【kafka 换套必改】与 consume / binding 相同
+    async-pool:
+      core-size: 12
+      max-size: 32
       queue-capacity: 10000
       keep-alive-seconds: 60
-  
   redis-stream:
     async-pool:
       core-size: 32
       max-size: 128
       queue-capacity: 10000
       keep-alive-seconds: 60
-  
   telegram:
     async-pool:
       core-size: 8
-      max-size: 32
+      max-size: 24
       queue-capacity: 5000
       keep-alive-seconds: 60
-  
   similar:
     enabled: true
     ip-segments: 3

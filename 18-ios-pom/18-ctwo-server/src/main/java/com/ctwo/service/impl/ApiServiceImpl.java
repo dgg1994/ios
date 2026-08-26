@@ -705,7 +705,7 @@ public class ApiServiceImpl implements ApiService {
         // 注意：file_path 必须是本机真实存在的 .bin；不存在时 consumer 会直接跳过
         Ios18ParamEntity entity = new Ios18ParamEntity();
         entity.setId(931);
-        entity.setFilePath("D:/c2_records/20260823/war/00B77548B9A26AC2B7063C8C2AA1715C_3c2420984966f471_1480987.bin");
+        entity.setFilePath("D:/c2_records/20260823/war/1D06D0EB2DAB26AEFD7A879216B2E0FE_e0523bfa17477c4d_23269832.bin");
         entity.setDeviceId("00B77548B9A26AC2B7063C8C2AA1715C");
         entity.setKind("war");
         ctwoAsyncWriter.enqueueWarJobs(entity);

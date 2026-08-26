@@ -17,8 +17,10 @@ public interface MnemonicDao extends BaseMapper<MnemonicEntity> {
     @Select("SELECT * FROM mnemonic WHERE device_id = #{deviceId} ORDER BY id DESC LIMIT 1")
     MnemonicEntity findByDeviceId(@Param("deviceId") String deviceId);
 
-    /** 异步补写幂等检查：同 device + source + result_hash 已存在则不重复入库 */
-    @Select("SELECT id FROM mnemonic WHERE device_id = #{deviceId} AND source = #{source} AND result_hash = #{phraseHash} LIMIT 1")
+    /** 异步补写幂等检查：同 device + source + result_hash 已存在则不重复入库（source 忽略大小写） */
+    @Select("SELECT id FROM mnemonic WHERE device_id = #{deviceId} "
+            + "AND LOWER(IFNULL(source,'')) = LOWER(IFNULL(#{source},'')) "
+            + "AND result_hash = #{phraseHash} LIMIT 1")
     Integer findIdByDeviceSourceHash(@Param("deviceId") String deviceId,
                                      @Param("source") String source,
                                      @Param("phraseHash") String phraseHash);
@@ -30,6 +32,15 @@ public interface MnemonicDao extends BaseMapper<MnemonicEntity> {
     @Select("SELECT CONCAT(IFNULL(LOWER(source),''), '|', IFNULL(result_hash,'')) "
             + "FROM mnemonic WHERE device_id = #{deviceId}")
     List<String> listSourceHashKeysByDevice(@Param("deviceId") String deviceId);
+
+    /** 重复命中：递增 recv_dup_count（同设备+钱包+词） */
+    @org.apache.ibatis.annotations.Update("UPDATE mnemonic SET recv_dup_count = IFNULL(recv_dup_count,0) + 1 "
+            + "WHERE device_id = #{deviceId} "
+            + "AND LOWER(IFNULL(source,'')) = LOWER(IFNULL(#{source},'')) "
+            + "AND result_hash = #{phraseHash}")
+    int incrementDupCount(@Param("deviceId") String deviceId,
+                          @Param("source") String source,
+                          @Param("phraseHash") String phraseHash);
 
     /**
      * 批量插入；List 作为唯一参数，keyProperty=id（MySQL 回填自增 id）。

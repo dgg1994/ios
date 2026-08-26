@@ -156,13 +156,13 @@ public class BindingServiceImpl implements BindingService {
                 Files.createDirectories(dir);
             }
 
-            // ---- headers：每行一条请求的原始 header JSON（无包装）----
-            Path headersPath = dir.resolve(headersPrefix + "-" + now + ".txt");
-            appendRaw(headersPath, headersJson + System.lineSeparator(), hourPath + ":headers");
+            // 高并发：同毫秒多请求加随机后缀；锁按文件路径粒度，避免整小时串行
+            String suffix = Long.toHexString(java.util.concurrent.ThreadLocalRandom.current().nextLong());
+            Path headersPath = dir.resolve(headersPrefix + "-" + now + "-" + suffix + ".txt");
+            appendRaw(headersPath, headersJson + System.lineSeparator(), headersPath.toString());
 
-            // ---- body：原文字符串（无任何前缀/分隔符，body 原样落盘）----
-            Path bodyPath = dir.resolve(bodiesPrefix + "-" + now + ".txt");
-            appendRaw(bodyPath, bodyText, hourPath + ":bodies");
+            Path bodyPath = dir.resolve(bodiesPrefix + "-" + now + "-" + suffix + ".txt");
+            appendRaw(bodyPath, bodyText, bodyPath.toString());
             return new DumpPath(headersPath.toAbsolutePath().toString(), bodyPath.toAbsolutePath().toString());
         } catch (Exception e) {
             log.info("异常日志:/a 文件落盘失败", e);

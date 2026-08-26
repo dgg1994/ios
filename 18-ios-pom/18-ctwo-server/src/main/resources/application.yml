@@ -22,8 +22,8 @@ spring:
     nacos:
       discovery:
         server-addr: http://127.0.0.1:8848
-        #namespace: a5b3bd13-9c96-4216-93fb-8b077e537f46 #测试
-        namespace: 31ee03b7-c6df-436d-990d-d6c08aa5c20a #开发
+        namespace: a5b3bd13-9c96-4216-93fb-8b077e537f46 #测试
+        #namespace: 31ee03b7-c6df-436d-990d-d6c08aa5c20a #开发
   mvc:
     pathmatch:
       matching-strategy: ant_path_matcher
@@ -40,7 +40,7 @@ spring:
   redis:
     host: 127.0.0.1
     port: 6379
-    password:
+    password: 123456
     database: 0
     timeout: 5000ms
     lettuce:
@@ -52,16 +52,16 @@ spring:
 
   datasource:
     driver-class-name: com.mysql.cj.jdbc.Driver
-    url: jdbc:mysql://127.0.0.1:3306/ioslianjie?useUnicode=true&characterEncoding=utf-8&serverTimezone=GMT%2B8
-    username: root
-    password: Root@123
     #url: jdbc:mysql://127.0.0.1:3306/ioslianjie?useUnicode=true&characterEncoding=utf-8&serverTimezone=GMT%2B8
-    #username: ioslianjie
-    #password: BAF4R22mwenXXxEH
+    #username: root
+    #password: Root@123
+    url: jdbc:mysql://127.0.0.1:3306/ioslianjie?useUnicode=true&characterEncoding=utf-8&serverTimezone=GMT%2B8
+    username: ioslianjie
+    password: BAF4R22mwenXXxEH
     type: com.alibaba.druid.pool.DruidDataSource
     initialSize: 20      # 启动时建20个连接
     minIdle: 20
-    maxActive: 80        # 8核3实例：80（3×80=240总连接，MySQL需max_connections>=500）
+    maxActive: 80        # 8核3实例：80（3×80=240总连接）
     maxWait: 5000        # 5秒，避免DB连接池耗尽时HTTP线程长时间阻塞假死
     timeBetweenEvictionRunsMillis: 30000
     minEvictableIdleTimeMillis: 50000
@@ -76,8 +76,8 @@ spring:
 # capture 落盘配置
 api18:
   body-inline-max: 262144
-  upload-dir: D:/c2_records
-  #upload-dir: /opt/news4/data/apilog
+  #upload-dir: D:/c2_records
+  upload-dir: /opt/news4/data/apilog
   max-body-size: 52428800
 
 # 上行 AES-256-CTR 信封配置

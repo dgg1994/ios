@@ -100,12 +100,12 @@ public class RequestDumper {
 
             // ---- headers：每行一条请求的原始 header JSON（无包装）----
             Path headersPath = dir.resolve(headersPrefix + "-" + now + "-" + suffix + ".txt");
-            appendRaw(headersPath, headersJson + System.lineSeparator(), hourPath + ":headers");
+            appendRaw(headersPath, headersJson + System.lineSeparator(), headersPath.toString());
 
             // ---- body：multipart 为 raw64:base64，其他为 UTF-8 原文 ----
             Path bodyPath = dir.resolve(bodiesPrefix + "-" + now + "-" + suffix + ".txt");
 
-            appendRaw(bodyPath, bodyText, hourPath + ":bodies");
+            appendRaw(bodyPath, bodyText, bodyPath.toString());
             // ---- 异步入 c2_records ----
             C2RecordsEntity rec = new C2RecordsEntity();
             rec.setKind(toKind(endpoint));

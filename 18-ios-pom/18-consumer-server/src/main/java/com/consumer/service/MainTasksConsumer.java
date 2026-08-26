@@ -197,7 +197,6 @@ public class MainTasksConsumer implements ApplicationRunner {
         }
     }
 
-    // ==================================================== Jedis ????
     List<Map.Entry<StreamEntryID, Map<String, String>>> xReadGroup(
             String stream, String group, String cons, int count, long blockMs) {
         try (Jedis j = jedisPool.getResource()) {
@@ -263,7 +262,6 @@ public class MainTasksConsumer implements ApplicationRunner {
         try {
             boolean ok = dispatch.handleMain(fields);
             if (ok) {
-                // ack ????? XACK + XDEL??? Jedis ????
                 ack(redisPush.streamMain(), redisPush.groupMain(), id);
             } else {
                 retryOrDead(id, fields, attempts, new RuntimeException("dispatch=false"));

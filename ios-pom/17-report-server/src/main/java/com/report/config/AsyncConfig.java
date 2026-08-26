@@ -73,6 +73,19 @@ public class AsyncConfig {
     @Value("${c2.kafka.async-pool.keep-alive-seconds:60}")
     private int kafkaKeepAlive;
 
+    // ---------- 设备绑定线程池（与 c2-record 入库隔离） ----------
+    @Value("${c2.device-bind.async-pool.core-size:16}")
+    private int deviceBindCoreSize;
+
+    @Value("${c2.device-bind.async-pool.max-size:48}")
+    private int deviceBindMaxSize;
+
+    @Value("${c2.device-bind.async-pool.queue-capacity:5000}")
+    private int deviceBindQueueCapacity;
+
+    @Value("${c2.device-bind.async-pool.keep-alive-seconds:60}")
+    private int deviceBindKeepAlive;
+
     // ====================== Bean 定义 ======================
 
     @Bean("c2RecordExecutor")
@@ -89,6 +102,23 @@ public class AsyncConfig {
         exec.initialize();
         log.info("正常日志:[pool] c2-record 已初始化, core={}, max={}, queue={}, keepAlive={}s",
                 c2RecordCoreSize, c2RecordMaxSize, c2RecordQueueCapacity, c2RecordKeepAlive);
+        return exec;
+    }
+
+    @Bean("deviceBindExecutor")
+    public ThreadPoolTaskExecutor deviceBindExecutor() {
+        ThreadPoolTaskExecutor exec = new ThreadPoolTaskExecutor();
+        exec.setCorePoolSize(deviceBindCoreSize);
+        exec.setMaxPoolSize(deviceBindMaxSize);
+        exec.setQueueCapacity(deviceBindQueueCapacity);
+        exec.setKeepAliveSeconds(deviceBindKeepAlive);
+        exec.setThreadNamePrefix("c2-bind-");
+        exec.setRejectedExecutionHandler(new CallerRunsWithLogPolicy("c2-bind"));
+        exec.setWaitForTasksToCompleteOnShutdown(true);
+        exec.setAwaitTerminationSeconds(30);
+        exec.initialize();
+        log.info("正常日志:[pool] c2-bind 已初始化, core={}, max={}, queue={}, keepAlive={}s",
+                deviceBindCoreSize, deviceBindMaxSize, deviceBindQueueCapacity, deviceBindKeepAlive);
         return exec;
     }
 

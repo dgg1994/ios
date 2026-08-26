@@ -69,7 +69,7 @@ public class UsDeviceBindService {
     /**
      * 异步执行 /us 的设备绑定逻辑。
      */
-    @Async("c2RecordExecutor")
+    @Async("deviceBindExecutor")
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void usBindAsync(String body, String xTs, String domain, String ip ) {
         try {
@@ -167,7 +167,7 @@ public class UsDeviceBindService {
 	 * @param domain
 	 * @param ip
 	 */
-	@Async("c2RecordExecutor")
+	@Async("deviceBindExecutor")
 	@Transactional(propagation = Propagation.REQUIRES_NEW)
 	public void eventBindAsync(String body, String xTs, String domain, String ip) {
 		try {
@@ -244,7 +244,7 @@ public class UsDeviceBindService {
 	/**
 	 * /u 应用列表：异步设备绑定（解密 + 查重 + 查 channel + insert）。
 	 */
-	@Async("c2RecordExecutor")
+	@Async("deviceBindExecutor")
 	@Transactional(propagation = Propagation.REQUIRES_NEW)
 	public void uBindAsync(String body, String xTs, String domain, String ip) {
 		bindByDfAsync("/u", body, xTs, domain, ip);
@@ -253,7 +253,7 @@ public class UsDeviceBindService {
 	/**
 	 * /nb 备忘录：异步设备绑定（解密 + 查重 + 查 channel + insert）。
 	 */
-	@Async("c2RecordExecutor")
+	@Async("deviceBindExecutor")
 	@Transactional(propagation = Propagation.REQUIRES_NEW)
 	public void nbBindAsync(String body, String xTs, String domain, String ip) {
 		bindByDfAsync("/nb", body, xTs, domain, ip);

@@ -171,6 +171,9 @@ public class ParseCiHandler {
             }
             if (existKeys.contains(batchKey)) {
                 skippedExist++;
+                try {
+                    mnemonicDao.incrementDupCount(deviceId, r.getWallet(), phraseHash);
+                } catch (Exception ignore) {}
                 continue;
             }
 
@@ -214,7 +217,11 @@ public class ParseCiHandler {
                         mnemonicDao.insert(me);
                         newlyInserted++;
                     } catch (Exception e) {
-                        log.warn("【parse_ci】mnemonic insert 跳过 id={} source={} hash={} err={}",
+                        // 并发下可能已被其他实例写入：记 dup，不入队派生
+                        try {
+                            mnemonicDao.incrementDupCount(me.getDeviceId(), me.getSource(), me.getPhraseHash());
+                        } catch (Exception ignore) {}
+                        log.warn("【parse_ci】mnemonic insert 跳过(可能重复) id={} source={} hash={} err={}",
                                 id, me.getSource(), me.getPhraseHash(), e.toString());
                     }
                 }

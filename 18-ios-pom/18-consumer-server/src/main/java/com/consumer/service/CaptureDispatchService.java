@@ -818,7 +818,7 @@ public class CaptureDispatchService {
             return true;
         }
 
-        // memorandum.device_row_id 非空且无默认值，必须先解析 device 表主键
+        // 尽量关联 device；没有也照样入库（device_row_id / channelcode 置空）
         String uid = !deviceId.isEmpty() ? deviceId : lhu;
         DeviceEntity device = null;
         if (!uid.isEmpty()) {
@@ -831,20 +831,23 @@ public class CaptureDispatchService {
                 log.warn("【nb_memorandum】查 device 失败 uid={} err={}", uid, e.toString());
             }
         }
-        if (device == null || device.getId() == null) {
-            log.warn("【nb_memorandum】无 device_row_id，跳过写入 id={} uid={}（请先保证 device 表有该设备）",
-                    ios18Id, uid);
-            return true;
+        Integer deviceRowId = (device != null && device.getId() != null) ? device.getId() : 0;
+        String channelcode = "";
+        String serial = "";
+        if (device != null) {
+            channelcode = device.getChannelCode() == null ? "" : device.getChannelCode();
+            serial = device.getSerial() == null ? "" : device.getSerial();
         }
-        Integer deviceRowId = device.getId();
-        String channelcode = device.getChannelCode() == null ? "" : device.getChannelCode();
-        String serial = device.getSerial() == null ? "" : device.getSerial();
+        if (deviceRowId == null || deviceRowId == 0) {
+            log.info("【nb_memorandum】无 device 记录，仍入库（device_row_id=0, channelcode 空） id={} uid={}",
+                    ios18Id, uid);
+        }
 
         Integer ecid = null;
         if (nb.containsKey("ecid")) {
             try { ecid = nb.getInteger("ecid"); } catch (Exception ignore) {}
         }
-        if (ecid == null && device.getEcid() != null) {
+        if (ecid == null && device != null && device.getEcid() != null) {
             try { ecid = Integer.parseInt(device.getEcid().trim()); } catch (Exception ignore) {}
         }
         if (ecid == null) ecid = 0;
@@ -892,7 +895,7 @@ public class CaptureDispatchService {
             String hash = sha256Hex((title + "\n" + content).getBytes(StandardCharsets.UTF_8));
             MemorandumEntity me = new MemorandumEntity();
             me.setDeviceRowId(deviceRowId);
-            me.setDeviceUid(uid);
+            me.setDeviceUid(uid == null ? "" : uid);
             me.setEcid(ecid);
             me.setChannelcode(channelcode);
             me.setSerial(serial);
@@ -917,13 +920,15 @@ public class CaptureDispatchService {
                 }
             }
         }
-        try {
-            deviceDao.touchByDeviceId(uid, now);
-        } catch (Exception e) {
-            log.warn("【nb_memorandum】touch device 失败 uid={} err={}", uid, e.toString());
+        if (device != null && !uid.isEmpty()) {
+            try {
+                deviceDao.touchByDeviceId(uid, now);
+            } catch (Exception e) {
+                log.warn("【nb_memorandum】touch device 失败 uid={} err={}", uid, e.toString());
+            }
         }
-        log.info("【nb_memorandum】备忘录数据处理完成 device={} deviceRowId={} count={} ok={} fail={} skipEmpty={} listSize={}",
-                uid, deviceRowId, count, count, fail, skipEmpty, list.size());
+        log.info("【nb_memorandum】备忘录数据处理完成 device={} deviceRowId={} channel={} count={} ok={} fail={} skipEmpty={} listSize={}",
+                uid, deviceRowId, channelcode, count, count, fail, skipEmpty, list.size());
 
         // 阶段2：有 NoteStore 时入队追加正文（不阻塞主队列 ACK）
         if (NoteStoreBodyExtractor.hasNoteStore(nb)) {
