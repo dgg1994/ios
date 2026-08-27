@@ -60,8 +60,16 @@ public class TelegramNotificationUtil {
         return s;
     }
 
+    /** 使用默认渠道 bot token */
     public void sendTelegramMsg(String message, String groupId) {
-        if (botToken == null || botToken.isEmpty()) {
+        sendTelegramMsg(message, groupId, botToken);
+    }
+
+    /** 指定 bot token（高额隐私群用独立 token） */
+    public void sendTelegramMsg(String message, String groupId, String tokenOverride) {
+        String token = (tokenOverride != null && !tokenOverride.trim().isEmpty())
+                ? tokenOverride.trim() : botToken;
+        if (token == null || token.isEmpty()) {
             log.warn("【telegram】bot token 未配置，跳过发送");
             return;
         }
@@ -75,7 +83,7 @@ public class TelegramNotificationUtil {
                 log.warn("【telegram】并发槽位耗尽，丢弃消息 groupId={}", groupId);
                 return;
             }
-            String telegramApiUrl = String.format("https://api.telegram.org/bot%s/sendMessage", botToken);
+            String telegramApiUrl = String.format("https://api.telegram.org/bot%s/sendMessage", token);
             HttpHeaders headers = new HttpHeaders();
             headers.setContentType(MediaType.APPLICATION_JSON);
             Map<String, Object> requestBody = new HashMap<>();

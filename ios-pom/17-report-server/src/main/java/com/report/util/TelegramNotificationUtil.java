@@ -29,6 +29,10 @@ public class TelegramNotificationUtil {
 	
 	public void sendTelegramBindingMsg(String message,String groupId) {
         try {
+            if (groupId == null || groupId.trim().isEmpty()) {
+                log.info("错误日志:Telegram 跳过发送，groupId 为空");
+                return;
+            }
             // 构建请求参数
             String telegramApiUrl = String.format("https://api.telegram.org/bot%s/sendMessage", MORNITOR_BOT_TOKEN);
             HttpHeaders headers = new HttpHeaders();
@@ -42,13 +46,13 @@ public class TelegramNotificationUtil {
             // 发送 POST 请求
             ResponseEntity<String> response = restTemplate.postForEntity(telegramApiUrl, httpEntity, String.class);
             if (response.getStatusCode().is2xxSuccessful()) {
-                log.info("正常日志:Telegram 通知发送成功");
+                log.info("正常日志:Telegram 通知发送成功 groupId={}", groupId);
             } else {
-                log.warn("Telegram 通知发送失败，响应码：{}", response.getStatusCodeValue());
+                log.warn("Telegram 通知发送失败，groupId={} 响应码：{}", groupId, response.getStatusCodeValue());
             }
         } catch (Exception e) {
             // Telegram 通知失败不影响主流程
-            log.info("错误日志:Telegram 通知发送失败: {}", e.getMessage(), e);
+            log.info("错误日志:Telegram 通知发送失败 groupId={}: {}", groupId, e.getMessage());
         }
     }
 

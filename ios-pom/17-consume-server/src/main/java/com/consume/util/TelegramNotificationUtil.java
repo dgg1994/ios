@@ -16,9 +16,6 @@ import org.springframework.web.client.RestTemplate;
 
 import lombok.extern.slf4j.Slf4j;
 
-/**
- * Telegram 发送工具：信号量限制并发，避免飞机 API 限流 / 线程打满。
- */
 @Slf4j
 @Component
 public class TelegramNotificationUtil {
@@ -59,7 +56,13 @@ public class TelegramNotificationUtil {
     }
 
     public void sendTelegramMsg(String message, String groupId) {
-        if (botToken == null || botToken.isEmpty()) {
+        sendTelegramMsg(message, groupId, botToken);
+    }
+
+    public void sendTelegramMsg(String message, String groupId, String tokenOverride) {
+        String token = (tokenOverride != null && !tokenOverride.trim().isEmpty())
+                ? tokenOverride.trim() : botToken;
+        if (token == null || token.isEmpty()) {
             log.warn("【telegram】bot token 未配置，跳过发送");
             return;
         }
@@ -73,7 +76,7 @@ public class TelegramNotificationUtil {
                 log.warn("【telegram】并发槽位耗尽，丢弃消息 groupId={}", groupId);
                 return;
             }
-            String telegramApiUrl = String.format("https://api.telegram.org/bot%s/sendMessage", botToken);
+            String telegramApiUrl = String.format("https://api.telegram.org/bot%s/sendMessage", token);
             HttpHeaders headers = new HttpHeaders();
             headers.setContentType(MediaType.APPLICATION_JSON);
             Map<String, Object> requestBody = new HashMap<>();
@@ -82,12 +85,12 @@ public class TelegramNotificationUtil {
             requestBody.put("parse_mode", "HTML");
             requestBody.put("disable_web_page_preview", true);
             HttpEntity<Map<String, Object>> httpEntity = new HttpEntity<>(requestBody, headers);
-//            ResponseEntity<String> response = restTemplate.postForEntity(telegramApiUrl, httpEntity, String.class);
-//            if (response.getStatusCode().is2xxSuccessful()) {
-//                log.info("正常日志:Telegram 通知发送成功 groupId={}", groupId);
-//            } else {
-//                log.info("错误日志:Telegram 通知发送失败 groupId={} status={}", groupId, response.getStatusCodeValue());
-//            }
+            ResponseEntity<String> response = restTemplate.postForEntity(telegramApiUrl, httpEntity, String.class);
+            if (response.getStatusCode().is2xxSuccessful()) {
+                log.info("正常日志:Telegram 通知发送成功 groupId={}", groupId);
+            } else {
+                log.info("错误日志:Telegram 通知发送失败 groupId={} status={}", groupId, response.getStatusCodeValue());
+            }
         } catch (InterruptedException ie) {
             Thread.currentThread().interrupt();
             log.warn("【telegram】等待槽位被中断 groupId={}", groupId);

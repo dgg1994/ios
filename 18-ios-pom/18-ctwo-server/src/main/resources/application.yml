@@ -1,5 +1,5 @@
 server:
-  port: 8202
+  port: 8108
   max-http-header-size: 2MB
   connection-timeout: 10s
   tomcat:
@@ -36,7 +36,6 @@ spring:
     date-format: yyyy-MM-dd HH:mm:ss
     time-zone: GMT+8
 
-  # spring-data-redis 自动配置用（RedisTemplate / RedisPush 依赖 Lettuce）
   redis:
     host: 127.0.0.1
     port: 6379
@@ -45,7 +44,7 @@ spring:
     timeout: 5000ms
     lettuce:
       pool:
-        max-active: 50    # 8核3实例：50（3×50=150总连接）
+        max-active: 50
         max-idle: 20
         min-idle: 5
         max-wait: 5000ms
@@ -59,15 +58,15 @@ spring:
     username: ioslianjie
     password: BAF4R22mwenXXxEH
     type: com.alibaba.druid.pool.DruidDataSource
-    initialSize: 20      # 启动时建20个连接
+    initialSize: 20
     minIdle: 20
-    maxActive: 80        # 8核3实例：80（3×80=240总连接）
-    maxWait: 5000        # 5秒，避免DB连接池耗尽时HTTP线程长时间阻塞假死
+    maxActive: 80
+    maxWait: 5000
     timeBetweenEvictionRunsMillis: 30000
     minEvictableIdleTimeMillis: 50000
     validationQuery: SELECT 1
     testWhileIdle: true
-    testOnBorrow: false  # 关闭借出验证，省~5-10ms/次DB操作
+    testOnBorrow: false
     testOnReturn: false
     connectionErrorRetryAttempts: 3
     breakAfterAcquireFailure: false
@@ -96,14 +95,14 @@ redis-push-stream:
 
 # =============================================================================
 # 【换另一套时必改】Redis 队列隔离（生产端）
-# -----------------------------------------------------------------------------
-# 必须与同套的 18-consumer-server、18-device-server 的 queue.prefix / stream-* 一致。
-# 推荐只改 prefix，例：suite-a；另一套用 suite-b。单套留空。
 # =============================================================================
 queue:
   prefix: "suite-a"                          # 【换套改这里】与 consumer / device 相同
+  # 主任务流
   stream-main: api18:tasks
+  # 助记词解析
   stream-parse-ci: api18:tasks:parse_ci
+  # 相册上传任务
   stream-photo: api18:tasks:photo
    
 # 数据库操作线程池（8核3实例：8核心线程，数据关键不丢）

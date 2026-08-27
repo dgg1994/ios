@@ -1,5 +1,5 @@
 server:
-  port: 8203
+  port: 8107
   max-http-header-size: 2MB
   connection-timeout: 10s
   tomcat:
@@ -63,16 +63,16 @@ spring:
     minIdle: 20
     maxActive: 80
     maxWait: 5000
-    timeBetweenEvictionRunsMillis: 30000  # 改为30秒
-    minEvictableIdleTimeMillis: 50000     # 改为50秒（小于60秒）
+    timeBetweenEvictionRunsMillis: 30000
+    minEvictableIdleTimeMillis: 50000
     validationQuery: SELECT 1
     testWhileIdle: true
-    testOnBorrow: false   # 关闭获取连接时验证，减少每次 borrow 的 5-10ms 开销
+    testOnBorrow: false
     testOnReturn: false
     connectionErrorRetryAttempts: 3
     breakAfterAcquireFailure: false
 
-# HTTP body 大小上限（配合 HttpRequestUtils.readBodyBytes 使用）
+# HTTP body 大小上限
 api18:
   max-body-size: 20971520
 
@@ -86,12 +86,10 @@ redis-push-stream:
 
 # =============================================================================
 # 【换另一套时必改】Redis 队列隔离（生产端）
-# -----------------------------------------------------------------------------
-# 必须与同套的 18-consumer-server、18-ctwo-server 的 queue.prefix / stream-main 一致。
-# 推荐只改 prefix，例：suite-a；另一套用 suite-b。单套留空。
 # =============================================================================
 queue:
   prefix: "suite-a"                          # 【换套改这里】与 consumer / ctwo 相同
+  # 主任务流
   stream-main: api18:tasks
    
 #数据库操作线程池

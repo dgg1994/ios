@@ -151,7 +151,6 @@ redis:
     maxTotal: 80
     
 
-
 # 【redis 通道换套必改】完整 key = redis-prefix + notify-stream，须与 17-consume 相同
 news4:
   redis-prefix: 'news4:'              # 例：另一套改为 'news4b:'
