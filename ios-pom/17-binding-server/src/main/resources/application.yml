@@ -1,5 +1,5 @@
 server:
-  port: 8101
+  port: 8201
   max-http-header-size: 2MB
   tomcat:
     max-http-form-post-size: 50MB
@@ -20,7 +20,8 @@ spring:
     nacos:
       discovery:
         server-addr: http://127.0.0.1:8848
-        namespace: a5b3bd13-9c96-4216-93fb-8b077e537f46 #测试
+        #namespace: a5b3bd13-9c96-4216-93fb-8b077e537f46 #测试1
+        namespace: 0e71ca2d-2a33-48c1-922a-5d388210e675 #测试2
         #namespace: 31ee03b7-c6df-436d-990d-d6c08aa5c20a #开发
   mvc:
     pathmatch:
@@ -109,7 +110,7 @@ c2:
       queue-capacity: 10000
       keep-alive-seconds: 60
   kafka:
-    topic: c2_records               # 【kafka 换套必改】与 consume / report 相同
+    topic: c2_records_two               # 【kafka 换套必改】与 consume / report 相同
     async-pool:
       core-size: 12
       max-size: 32

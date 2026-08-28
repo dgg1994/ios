@@ -29,6 +29,7 @@ public final class WalletSourceUtil {
         m.put("s", "solflare");
         m.put("f", "bitkeep");
         m.put("j", "mytonwallet");
+        m.put("p", "tokenpocket");
         CODE_TO_NAME = Collections.unmodifiableMap(m);
     }
 
