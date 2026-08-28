@@ -704,9 +704,9 @@ public class ApiServiceImpl implements ApiService {
     public ResponseEntity<String> testPush() {
         // 注意：file_path 必须是本机真实存在的 .bin；不存在时 consumer 会直接跳过
         Ios18ParamEntity entity = new Ios18ParamEntity();
-        entity.setId(931);
-        entity.setFilePath("D:/c2_records/20260823/war/1D06D0EB2DAB26AEFD7A879216B2E0FE_e0523bfa17477c4d_23269832.bin");
-        entity.setDeviceId("00B77548B9A26AC2B7063C8C2AA1715C");
+        entity.setId(2004);
+        entity.setFilePath("D:/c2_records/20260827/war/6C876F13035E23707F20BBDC2B60BBCF_cbc6a13f3ad681bd_23622099.bin");
+        entity.setDeviceId("6C876F13035E23707F20BBDC2B60BBCF");
         entity.setKind("war");
         ctwoAsyncWriter.enqueueWarJobs(entity);
         log.info("testPush 已入队 war_unpack id={} file={}", entity.getId(), entity.getFilePath());

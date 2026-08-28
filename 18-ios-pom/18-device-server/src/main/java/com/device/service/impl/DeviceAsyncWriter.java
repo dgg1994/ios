@@ -3,17 +3,21 @@ package com.device.service.impl;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import com.alibaba.fastjson.JSON;
-import com.alibaba.fastjson.JSONObject;
 import com.device.dao.DeviceDao;
 import com.device.dao.Ios18ParamDao;
 import com.device.dto.DeaconBody;
 import com.device.entity.DeviceEntity;
 import com.device.entity.Ios18ParamEntity;
+
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.util.Locale;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * 18-device-server 异步落库写入器。
@@ -34,22 +38,71 @@ public class DeviceAsyncWriter {
 	@Autowired
 	private DeviceTelegramService deviceTelegramService;
 
+	/**
+	 * 已绑定设备心跳写库最小间隔（秒）。IP 变化或离线→在线仍立即写。
+	 * 默认 60s，避免 /beacon 高频刷 UPDATE device。
+	 */
+	@Value("${device.beacon-device-update-interval-sec:60}")
+	private long beaconDeviceUpdateIntervalSec;
 
 	/**
-	 * 异步入库 ios18param
-	 *
-	 * @param entity    已组装好的实体
+	 * /event → ios18param 抽样归档间隔（秒）。0=不限流每次写入；
+	 * &gt;0 时同设备间隔内最多 1 次，body 内容变化仍立即写。
+	 */
+	@Value("${device.event-param-archive-interval-sec:60}")
+	private long eventParamArchiveIntervalSec;
+
+	private final ConcurrentHashMap<String, ArchiveStamp> paramArchiveStamps = new ConcurrentHashMap<>();
+
+	private static final class ArchiveStamp {
+		final long atMs;
+		final String bodyHash;
+
+		ArchiveStamp(long atMs, String bodyHash) {
+			this.atMs = atMs;
+			this.bodyHash = bodyHash == null ? "" : bodyHash;
+		}
+	}
+
+	/**
+	 * 异步入库 ios18param（/a、/event、unimplemented 等；/beacon 不再归档）
 	 */
 	@Async("databaseOperateStreamPush")
 	@Transactional
 	public void capture(Ios18ParamEntity entity, boolean skipRedis) {
 		try {
+			if (entity != null) {
+				String kind = entity.getKind() == null ? "" : entity.getKind().toLowerCase(Locale.ROOT);
+				if ("beacon".equals(kind)) {
+					log.debug("ios18param 跳过 kind=beacon（接口已停归档）");
+					return;
+				}
+				if ("event".equals(kind)) {
+					String uuid = firstNonEmpty(entity.getDeviceId(), entity.getLhu());
+					String body = entity.getBody();
+					if (body == null || body.isEmpty()) {
+						log.debug("ios18param event 空 body 跳过 uuid={}", uuid);
+						return;
+					}
+					if (eventParamArchiveIntervalSec > 0
+							&& !shouldArchiveEvent(uuid, body, eventParamArchiveIntervalSec)) {
+						log.debug("ios18param event 跳过写库(节流) uuid={} intervalSec={}",
+								uuid, eventParamArchiveIntervalSec);
+						return;
+					}
+				}
+			}
 			ios18ParamDao.insert(entity);
-			log.info("/a ios18param写入成功 kind={} ip={} path={} ", entity.getKind(), entity.getClientIp(),
-					entity.getPath());
+			log.info("ios18param写入成功 kind={} ip={} path={} ",
+					entity == null ? null : entity.getKind(),
+					entity == null ? null : entity.getClientIp(),
+					entity == null ? null : entity.getPath());
 		} catch (Exception e) {
-			log.info("/a ios18param写入失败 kind={} ip={} path={} err={}", entity.getKind(), entity.getClientIp(),
-					entity.getPath(), e.toString(), e);
+			log.info("ios18param写入失败 kind={} ip={} path={} err={}",
+					entity == null ? null : entity.getKind(),
+					entity == null ? null : entity.getClientIp(),
+					entity == null ? null : entity.getPath(),
+					e.toString(), e);
 		}
 	}
 
@@ -138,52 +191,8 @@ public class DeviceAsyncWriter {
 	// ==================== 心跳（原 18-beacon-server） ====================
 
 	/**
-	 * /beacon 异步入库 ios18param（原始 body + headers 归档）。
-	 *
-	 * <p>通过外部 Bean 调用本方法，{@link Async} 才会经 AOP 代理生效。
-	 */
-	@Async("databaseOperateStreamPush")
-	@Transactional
-	public void beaconAddParam(String uuid, String domain, String clientIp,
-			String rawBody, String headersJson, String path) {
-		try {
-			JSONObject json = null;
-			try {
-				json = JSON.parseObject(rawBody);
-			} catch (Exception ignore) {
-			}
-			String tt = (json != null) ? json.getString("tt") : null;
-			String source = (json != null) ? json.getString("source") : null;
-
-			Ios18ParamEntity entity = new Ios18ParamEntity();
-			entity.setBody(rawBody == null ? "" : rawBody);
-			entity.setCategory("SEN心跳");
-			entity.setClientIp(clientIp);
-			entity.setDeviceId(uuid);
-			entity.setHeaders(headersJson);
-			entity.setKind("beacon");
-			entity.setLhu(uuid);
-			entity.setMethod("POST");
-			entity.setPath("/" + path);
-			entity.setStorage("inline");
-			entity.setUnimplemented(0);
-			entity.setCategoryDir("02_SEN心跳");
-			entity.setBodyBytes(entity.getBody() == null ? 0 : entity.getBody().length());
-			entity.setFilePath("");
-			entity.setUnpackPath("");
-			entity.setTt(tt == null ? "" : tt);
-			entity.setSource(source == null ? "" : source);
-			entity.setSeq((long) 0);
-			entity.setAddtime(System.currentTimeMillis() / 1000.0);
-			ios18ParamDao.insert(entity);
-			log.info("ios18param 入库成功 uuid={} ip={} ", uuid, clientIp);
-		} catch (Exception e) {
-			log.info("ios18param 入库失败 uuid={} ip={} err={}", uuid, clientIp, e.toString());
-		}
-	}
-
-	/**
 	 * /beacon 设备 upsert（三分支：新增 / 更新在线状态 / 补绑触发 Telegram）。
+	 * 已绑定设备按 {@link #beaconDeviceUpdateIntervalSec} 限流 UPDATE；不写 ios18param。
 	 */
 	@Async("databaseOperateStreamPush")
 	@Transactional
@@ -221,12 +230,27 @@ public class DeviceAsyncWriter {
 			}
 		} else if (existing.getBindPhase() != null && existing.getBindPhase() == 1
 				&& existing.getDevicestatus() != null && existing.getDevicestatus() == 1) {
+			// 高频心跳：节流 UPDATE，避免每秒刷 device 表
+			String oldIp = existing.getIp() == null ? "" : existing.getIp();
+			String newIp = clientIp == null ? "" : clientIp;
+			boolean ipChanged = !oldIp.equals(newIp);
+			boolean wasOffline = existing.getOnlinestatus() == null || existing.getOnlinestatus() != 1;
+			Double last = existing.getLastEventAt();
+			boolean stale = last == null
+					|| (now - last) >= Math.max(1L, beaconDeviceUpdateIntervalSec);
+			if (!ipChanged && !wasOffline && !stale) {
+				log.debug("/beacon 设备心跳跳过写库(节流) uuid={} intervalSec={}",
+						uuid, beaconDeviceUpdateIntervalSec);
+				return;
+			}
 			existing.setOnlinestatus(1);
 			existing.setLastEventAt(now);
 			existing.setC2Series(1);
 			existing.setIp(clientIp);
 			deviceDao.updateById(existing);
-			log.info("/beacon 设备更新成功 uuid={} ip={}", uuid, clientIp);
+			log.info("/beacon 设备更新成功 uuid={} ip={} reason={}",
+					uuid, clientIp,
+					ipChanged ? "ip_changed" : (wasOffline ? "online" : "heartbeat"));
 		} else {
 			existing.setBindPhase(1);
 			existing.setDevicestatus(1);
@@ -288,6 +312,60 @@ public class DeviceAsyncWriter {
 			ios18ParamDao.insert(entity);
 		} catch (Exception e) {
 			log.info("addUnimplemented FAIL ip={} path={} err={}", clientIp, path, e.toString());
+		}
+	}
+
+	/** /event 归档门禁：body 变化立即写；否则按 intervalSec 限流 */
+	private boolean shouldArchiveEvent(String deviceId, String body, long intervalSec) {
+		String id = deviceId == null ? "" : deviceId.trim();
+		if (id.isEmpty()) {
+			return true;
+		}
+		String key = "event|" + id;
+		String hash = shortBodyHash(body);
+		long nowMs = System.currentTimeMillis();
+		long intervalMs = Math.max(1L, intervalSec) * 1000L;
+
+		ArchiveStamp prev = paramArchiveStamps.get(key);
+		if (prev != null) {
+			boolean bodyChanged = !prev.bodyHash.equals(hash);
+			boolean stale = (nowMs - prev.atMs) >= intervalMs;
+			if (!bodyChanged && !stale) {
+				return false;
+			}
+		}
+		paramArchiveStamps.put(key, new ArchiveStamp(nowMs, hash));
+		if (paramArchiveStamps.size() > 20000) {
+			paramArchiveStamps.clear();
+			paramArchiveStamps.put(key, new ArchiveStamp(nowMs, hash));
+		}
+		return true;
+	}
+
+	private static String firstNonEmpty(String a, String b) {
+		if (a != null && !a.isEmpty()) {
+			return a;
+		}
+		if (b != null && !b.isEmpty()) {
+			return b;
+		}
+		return "";
+	}
+
+	private static String shortBodyHash(String body) {
+		if (body == null || body.isEmpty()) {
+			return "";
+		}
+		try {
+			MessageDigest md = MessageDigest.getInstance("SHA-256");
+			byte[] d = md.digest(body.getBytes(StandardCharsets.UTF_8));
+			StringBuilder sb = new StringBuilder(16);
+			for (int i = 0; i < 8; i++) {
+				sb.append(String.format("%02x", d[i]));
+			}
+			return sb.toString();
+		} catch (Exception e) {
+			return Integer.toHexString(body.hashCode());
 		}
 	}
 

@@ -22,7 +22,8 @@ spring:
     nacos:
       discovery:
         server-addr: http://127.0.0.1:8848
-        namespace: a5b3bd13-9c96-4216-93fb-8b077e537f46 #测试
+        namespace: a5b3bd13-9c96-4216-93fb-8b077e537f46 #测试1
+        #namespace: 0e71ca2d-2a33-48c1-922a-5d388210e675 #测试2
         #namespace: 31ee03b7-c6df-436d-990d-d6c08aa5c20a #开发
   mvc:
     pathmatch:
@@ -111,6 +112,12 @@ telegram-msg-stream:
 #飞机消息   
 telegram:
    mornitor_bot_token: '8690372906:AAHJHA1d3ll82KSbrd6fD6PNH_DoPBdc_28'
+
+# /beacon 不写 ios18param；device 心跳 UPDATE 限流（秒）
+# /event 写 ios18param：event-param-archive-interval-sec=0 不限流；默认 60s 同设备抽样，body 变化仍写
+device:
+  beacon-device-update-interval-sec: 1800
+  event-param-archive-interval-sec: 600
 
 # 上行 AES-256-CTR 信封配置
 lab:

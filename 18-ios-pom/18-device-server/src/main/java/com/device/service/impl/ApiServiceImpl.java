@@ -131,8 +131,8 @@ public class ApiServiceImpl implements ApiService {
     
     @Override
     public ResponseEntity<String> postEvent(HttpServletRequest request) {
-    	String body = decryptBody(HttpRequestUtils.readBody(request));
-        dispatchCapture(request, body,"event", "状态上报", "03_状态上报", false);
+        String body = decryptBody(HttpRequestUtils.readBody(request));
+        dispatchCapture(request, body, "event", "状态上报", "03_状态上报", false);
         return ackText("0\ncfgVer=");
     }
 
@@ -187,8 +187,7 @@ public class ApiServiceImpl implements ApiService {
                 log.info("beacon uuid empty ip={} path={}", clientIp, path);
                 return new ApiResponse(clientIp);
             }
-            String headersJson = HttpRequestUtils.toHeadersJson(request);
-            asyncWriter.beaconAddParam(deaconBody.getUuid(), domain, clientIp, body, headersJson, path);
+            // 不写 ios18param；仅限流更新 device 在线状态
             asyncWriter.beaconAddDevice(deaconBody.getUuid(), domain, clientIp, deaconBody);
             return new ApiResponse(clientIp);
         } catch (Exception e) {

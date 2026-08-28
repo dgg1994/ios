@@ -45,15 +45,15 @@ public class DecryptTaskEntity implements Serializable {
 	@TableField("hex_type")
 	private String hexType;
 
-	/**
-	 * 需要爆破的加密数据
+    /**
+	 * 待爆破材料目录绝对路径（一钱包一目录；目录内可有多份 payload_* 文件）
 	 */
 	@TableField("hex_content")
 	private String hexContent;
 
     /**
 	 * 加密算法 / 方案（如 AES、CryptoJS-AES、scrypt+AES-128-CTR），
-	 * 不是材料文件名标签。
+	 * 取该钱包主材料算法；不是材料文件名标签。
 	 */
 	@TableField("encrypt_type")
 	private String encryptType;

