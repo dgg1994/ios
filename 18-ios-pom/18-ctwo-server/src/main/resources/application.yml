@@ -1,5 +1,5 @@
 server:
-  port: 8208
+  port: 8108
   max-http-header-size: 2MB
   connection-timeout: 10s
   tomcat:
@@ -98,7 +98,7 @@ redis-push-stream:
 # 【换另一套时必改】Redis 队列隔离（生产端）
 # =============================================================================
 queue:
-  prefix: "suite-b"                          # 【换套改这里】与 consumer / device 相同
+  prefix: "suite-a"                          # 【换套改这里】与 consumer / device 相同
   # 主任务流
   stream-main: api18:tasks
   # 助记词解析
