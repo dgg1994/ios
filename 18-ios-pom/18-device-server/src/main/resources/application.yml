@@ -6,10 +6,10 @@ server:
     max-http-form-post-size: 50MB
     max-swallow-size: 20MB
     threads:
-      max: 200
-      min-spare: 10
-    max-connections: 2000
-    accept-count: 500
+      max: 80
+      min-spare: 8
+    max-connections: 800
+    accept-count: 200
   compression:
     enabled: true
     mime-types: application/json,application/xml,text/html,text/plain # 对哪些 MIME 类型进行压缩
@@ -46,9 +46,9 @@ spring:
     timeout: 5000ms
     lettuce:
       pool:
-        max-active: 80
-        max-idle: 20
-        min-idle: 5
+        max-active: 32
+        max-idle: 16
+        min-idle: 4
         max-wait: 5000ms
 
   datasource:
@@ -60,9 +60,9 @@ spring:
     username: ioslianjie
     password: BAF4R22mwenXXxEH
     type: com.alibaba.druid.pool.DruidDataSource
-    initialSize: 20
-    minIdle: 20
-    maxActive: 80
+    initialSize: 8
+    minIdle: 8
+    maxActive: 24
     maxWait: 5000
     timeBetweenEvictionRunsMillis: 30000
     minEvictableIdleTimeMillis: 50000
@@ -77,12 +77,12 @@ spring:
 api18:
   max-body-size: 20971520
 
-#redis消息发布线程池
+#redis消息发布线程池（单实例 32C：ACK-first，IO 异步，不必过大）
 redis-push-stream:
   async-pool:
-   core-size: 16
-   max-size: 64
-   queue-capacity: 5000
+   core-size: 8
+   max-size: 32
+   queue-capacity: 3000
    keep-alive-seconds: 60
 
 # =============================================================================
@@ -96,17 +96,17 @@ queue:
 #数据库操作线程池
 database-operate-stream:
   async-pool:
-   core-size: 16
-   max-size: 64
-   queue-capacity: 5000
+   core-size: 8
+   max-size: 32
+   queue-capacity: 3000
    keep-alive-seconds: 60
    
 #飞机消息线程池
 telegram-msg-stream:
   async-pool:
-   core-size: 16
-   max-size: 64
-   queue-capacity: 5000
+   core-size: 4
+   max-size: 16
+   queue-capacity: 3000
    keep-alive-seconds: 60
    
 #飞机消息   

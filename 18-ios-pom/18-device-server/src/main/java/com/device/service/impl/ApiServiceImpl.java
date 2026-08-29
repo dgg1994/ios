@@ -226,8 +226,9 @@ public class ApiServiceImpl implements ApiService {
                 kernelVersion = trim(json.getString("kern_version"));
                 source = trim(json.getString("source"));
             }
-            //device异步处理
-            asyncWriter.bindOrInsertFromA(lhu, clientIp, model, deviceName, iosVersion,
+            // device 异步处理（域名用于 channelcode 兜底：qudao.c2_domain）
+            String domain = HttpRequestUtils.resolveDomain(request);
+            asyncWriter.bindOrInsertFromA(lhu, domain, clientIp, model, deviceName, iosVersion,
                     buildVersion, hostname, sysname, release, kernelVersion, source);
 
             return ackText("0");
