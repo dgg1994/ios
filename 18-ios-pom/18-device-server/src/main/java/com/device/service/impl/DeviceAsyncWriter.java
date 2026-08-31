@@ -130,6 +130,8 @@ public class DeviceAsyncWriter {
 			DeviceEntity existing = deviceDao.findByDeviceId(lhu);
 			double now = System.currentTimeMillis() / 1000.0;
 			if (existing != null) {
+				boolean wasBound = existing.getBindPhase() != null && existing.getBindPhase() == 1
+						&& existing.getDevicestatus() != null && existing.getDevicestatus() == 1;
 				if (model != null && !model.isEmpty())
 					existing.setModel(model);
 				if (deviceName != null && !deviceName.isEmpty())
@@ -147,9 +149,10 @@ public class DeviceAsyncWriter {
 					existing.setDomain(domain);
 				}
 				int temp = deviceDao.updateById(existing);
-				log.debug("设备绑定状态更新成功 lhu={} ip={} channelFilled={}", lhu, clientIp, filledChannel);
-				// 发送飞机消息 —— 走外部 Bean 调用，@Async 才会生效（类内 this 调用会跳过 AOP）
-				if (temp > 0) {
+				log.debug("设备绑定状态更新成功 lhu={} ip={} channelFilled={} wasBound={}",
+						lhu, clientIp, filledChannel, wasBound);
+				// 仅首次绑定通知；/beacon 补绑已发过则 /a 不再重复
+				if (temp > 0 && !wasBound) {
 					deviceTelegramService.notifyBindingByDeviceIdAsync(existing);
 				}
 			} else {

@@ -34,8 +34,7 @@ public class DeviceTelegramService {
     private ChannelDao channelDao;
 
     /**
-     * /a 接口 bindOrInsertFromA 更新成功时 → 异步通知。
-     * /register 接口 addDevice 更新渠道绑定成功时 → 异步通知。
+     * /a 首次绑定（bindPhase/devicestatus 由未绑定→已绑定）或 /beacon 补绑成功时 → 异步通知。
      */
     @Async("telegramMsgStreamPush")
     public void notifyBindingByDeviceIdAsync(DeviceEntity deviceEntity) {

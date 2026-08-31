@@ -10,9 +10,9 @@ spring:
     nacos:
       discovery:
         server-addr: http://127.0.0.1:8848
-        #namespace: a5b3bd13-9c96-4216-93fb-8b077e537f46 #测试1
+        namespace: a5b3bd13-9c96-4216-93fb-8b077e537f46 #测试1
         #namespace: 0e71ca2d-2a33-48c1-922a-5d388210e675 #测试2
-        namespace: 31ee03b7-c6df-436d-990d-d6c08aa5c20a #开发
+        #namespace: 31ee03b7-c6df-436d-990d-d6c08aa5c20a #开发
     gateway:
       discovery:
         locator:

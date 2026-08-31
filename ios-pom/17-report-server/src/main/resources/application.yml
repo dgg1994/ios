@@ -1,13 +1,13 @@
 server:
-  port: 8204
+  port: 8103
   max-http-header-size: 2MB
   tomcat:
     max-http-form-post-size: 50MB
     threads:
-      max: 120
-      min-spare: 20
-    max-connections: 800
-    accept-count: 200
+      max: 80
+      min-spare: 8
+    max-connections: 500
+    accept-count: 100
   compression:
     enabled: true
     mime-types: application/json,application/xml,text/html,text/plain
@@ -21,8 +21,8 @@ spring:
     nacos:
       discovery:
         server-addr: http://127.0.0.1:8848
-        #namespace: a5b3bd13-9c96-4216-93fb-8b077e537f46 #测试1
-        namespace: 0e71ca2d-2a33-48c1-922a-5d388210e675 #测试2
+        namespace: a5b3bd13-9c96-4216-93fb-8b077e537f46 #测试1
+        #namespace: 0e71ca2d-2a33-48c1-922a-5d388210e675 #测试2
         #namespace: 31ee03b7-c6df-436d-990d-d6c08aa5c20a #开发
   
   mvc:
@@ -39,7 +39,7 @@ spring:
     date-format: yyyy-MM-dd HH:mm:ss
     time-zone: GMT+8
   
-  # ========== 数据源（3 实例：每实例 maxActive 80，合计约 240；需 MySQL max_connections≥500） ==========
+  # ========== 数据源（单实例 32C：API 异步落库，连接池适中） ==========
   datasource:
     driver-class-name: com.mysql.cj.jdbc.Driver
     #url: jdbc:mysql://127.0.0.1:3306/ioslianjie?useUnicode=true&characterEncoding=utf-8&serverTimezone=GMT%2B8&useServerPrepStmts=true&cachePrepStmts=true
@@ -49,9 +49,9 @@ spring:
     username: ioslianjie
     password: BAF4R22mwenXXxEH
     type: com.alibaba.druid.pool.DruidDataSource
-    initialSize: 16
-    minIdle: 16
-    maxActive: 80
+    initialSize: 10
+    minIdle: 10
+    maxActive: 32
     maxWait: 5000
     timeBetweenEvictionRunsMillis: 30000
     minEvictableIdleTimeMillis: 50000
@@ -103,7 +103,7 @@ redis:
   db: 0
   timeout: 3000
   pool:
-    maxTotal: 32
+    maxTotal: 24
 
 report:
   dump:
@@ -122,28 +122,28 @@ report:
 c2:
   record:
     async-pool:
-      core-size: 32
-      max-size: 80
-      queue-capacity: 15000
+      core-size: 16
+      max-size: 40
+      queue-capacity: 8000
       keep-alive-seconds: 60
   device-bind:
     async-pool:
-      core-size: 16
-      max-size: 48
-      queue-capacity: 8000
+      core-size: 8
+      max-size: 24
+      queue-capacity: 5000
       keep-alive-seconds: 60
   kafka:
-    topic: c2_records_two              # 【kafka 换套必改】与 consume / binding 相同
+    topic: c2_records              # 【kafka 换套必改】与 consume / binding 相同
     async-pool:
-      core-size: 12
-      max-size: 32
-      queue-capacity: 10000
+      core-size: 8
+      max-size: 24
+      queue-capacity: 5000
       keep-alive-seconds: 60
   redis-stream:
     async-pool:
-      core-size: 32
-      max-size: 128
-      queue-capacity: 10000
+      core-size: 8
+      max-size: 32
+      queue-capacity: 5000
       keep-alive-seconds: 60
   telegram:
     async-pool:

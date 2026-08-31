@@ -1,5 +1,5 @@
 server:
-  port: 8107
+  port: 8104
   max-http-header-size: 2MB
   connection-timeout: 10s
   tomcat:

