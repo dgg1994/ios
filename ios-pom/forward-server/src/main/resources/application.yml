@@ -10,9 +10,9 @@ spring:
     nacos:
       discovery:
         server-addr: http://127.0.0.1:8848
-        namespace: a5b3bd13-9c96-4216-93fb-8b077e537f46 #测试1
+        #namespace: a5b3bd13-9c96-4216-93fb-8b077e537f46 #测试1
         #namespace: 0e71ca2d-2a33-48c1-922a-5d388210e675 #测试2
-        #namespace: 31ee03b7-c6df-436d-990d-d6c08aa5c20a #开发
+        namespace: 31ee03b7-c6df-436d-990d-d6c08aa5c20a #开发
     gateway:
       discovery:
         locator:
@@ -110,15 +110,7 @@ spring:
           filters:
             - StripPrefix=0
 
-        # 18 兜底（必须带 Header，避免吞掉 legacy 流量）
-        - id: s18-capture-default-route
-          uri: lb://18-ctwo-server
-          order: 99
-          predicates:
-            - Header=X-Series, ^darksword$
-            - Path=/**
-          filters:
-            - StripPrefix=0
+        # 18 未知路径：网关直接 404，不再转发到 ctwo captureUnimplemented
 
         # ========== legacy（17 及以下，无 X-Series 头走这里）==========
         # /a + /api/ip-sync/** → 17-binding-server（ip-sync 已从 17-ctwo-server 合并至此）

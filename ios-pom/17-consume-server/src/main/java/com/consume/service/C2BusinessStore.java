@@ -79,7 +79,7 @@ public class C2BusinessStore {
 
     // ---------- 通用解密落库 ----------
 
-    /** 写 c2_event_decrypt（/event /u /us /nb 共用；不含 /t 的 file blob） */
+    /** 写 c2_event_decrypt（/event /u /us /nb /t 占位共用）。同一 c2_record_id 重投时幂等跳过。 */
     public void saveEventDecrypt(C2HandlerContext ctx, String plaintextJson, String keyLabel) {
         try {
             C2EventEecryptEntity e = new C2EventEecryptEntity();
@@ -93,10 +93,31 @@ public class C2BusinessStore {
             e.setErrormsg(ctx.getDecryptError() == null ? "" : ctx.getDecryptError());
             e.setDecryptedAt(System.currentTimeMillis() / 1000.0);
             c2EventDecryptDao.insert(e);
+        } catch (DuplicateKeyException dup) {
+            log.debug("正常日志:[c2_handlers][save_event_decrypt] 已存在，跳过插入, recordId={}",
+                    ctx.getRecordId());
         } catch (Exception ex) {
+            if (isDuplicateKey(ex)) {
+                log.debug("正常日志:[c2_handlers][save_event_decrypt] 已存在，跳过插入, recordId={}",
+                        ctx.getRecordId());
+                return;
+            }
             log.info("异常日志:[c2_handlers][save_event_decrypt] 写入失败, recordId={}, err={}",
                     ctx.getRecordId(), ex.getMessage());
         }
+    }
+
+    private static boolean isDuplicateKey(Throwable ex) {
+        for (Throwable t = ex; t != null; t = t.getCause()) {
+            if (t instanceof DuplicateKeyException) {
+                return true;
+            }
+            String msg = t.getMessage();
+            if (msg != null && (msg.contains("Duplicate entry") || msg.contains("uk_c2_event_decrypt"))) {
+                return true;
+            }
+        }
+        return false;
     }
 
     // ---------- /event ----------
@@ -475,7 +496,7 @@ public class C2BusinessStore {
             if (existing != null && existing.getId() != null) {
                 albumDao.fillC2RecordId(existing.getId(), c2RecordId);
                 Integer st = existing.getStatus();
-                log.info("正常日志:[c2_handlers][album] 已存在，跳过插入, recordId={}, albumId={}, status={}",
+                log.debug("正常日志:[c2_handlers][album] 已存在，跳过插入, recordId={}, albumId={}, status={}",
                         ctx.getRecordId(), existing.getId(), st);
                 // 未成功落盘的重复消息：再投一次解图（幂等：OK 则跳过）
                 if ((st == null || st != 1) && fileBlob != null && fileBlob.length > 0) {
@@ -523,7 +544,7 @@ public class C2BusinessStore {
             }
 
             Integer albumId = e.getId();
-            log.info("正常日志:[c2_handlers][album] 写入, recordId={}, albumId={}, fileSize={}, sha256={}",
+            log.debug("正常日志:[c2_handlers][album] 写入, recordId={}, albumId={}, fileSize={}, sha256={}",
                     ctx.getRecordId(), albumId, e.getFileSize(), e.getFileSha256());
 
             if (albumId != null && albumId > 0 && fileBlob != null && fileBlob.length > 0) {
@@ -596,7 +617,7 @@ public class C2BusinessStore {
         try {
             AlbumEntity cur = albumDao.selectById(albumId);
             if (cur != null && cur.getStatus() != null && cur.getStatus() == 1) {
-                log.info("正常日志:[c2_handlers][album] 已是 OK，跳过解图, albumId={}", albumId);
+                log.debug("正常日志:[c2_handlers][album] 已是 OK，跳过解图, albumId={}", albumId);
                 return;
             }
         } catch (Exception ignore) {
@@ -656,7 +677,7 @@ public class C2BusinessStore {
         upd.setErrorMsg("");
         upd.setParsedAt(System.currentTimeMillis() / 1000.0);
         albumDao.updateById(upd);
-        log.info("正常日志:[c2_handlers][album] 图片落盘成功, albumId={}, size={}, path={}",
+        log.debug("正常日志:[c2_handlers][album] 图片落盘成功, albumId={}, size={}, path={}",
                 albumId, image.length, absPath.getAbsolutePath());
     }
 

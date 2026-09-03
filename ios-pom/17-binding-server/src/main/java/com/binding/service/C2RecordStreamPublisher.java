@@ -14,6 +14,8 @@ import redis.clients.jedis.JedisPoolConfig;
 import redis.clients.jedis.StreamEntryID;
 import redis.clients.jedis.params.XAddParams;
 
+import com.binding.util.C2PathUtil;
+
 import java.util.HashMap;
 import java.util.Map;
 
@@ -53,10 +55,14 @@ public class C2RecordStreamPublisher {
     @Value("${news4.c2.notify-stream:c2:new}")
     private String notifyStreamSuffix;
 
+    @Value("${news4.c2.notify-stream-t:c2:new:t}")
+    private String notifyAlbumStreamSuffix;
+
     private JedisPool pool;
 
-    private String streamKey() {
-        return redisPrefix + notifyStreamSuffix;
+    private String streamKey(String path) {
+        String suffix = C2PathUtil.isAlbumPath(path) ? notifyAlbumStreamSuffix : notifyStreamSuffix;
+        return redisPrefix + suffix;
     }
 
     @PostConstruct
@@ -65,8 +71,8 @@ public class C2RecordStreamPublisher {
         cfg.setMaxTotal(maxTotal);
         this.pool = new JedisPool(cfg, host, port, timeoutMs,
                 (password == null || password.isEmpty()) ? null : password, db);
-        log.info("正常日志:c2 record stream 发布器已就绪, host={}, port={}, db={}, stream={}, maxTotal={}",
-                host, port, db, streamKey(), maxTotal);
+        log.info("正常日志:c2 record stream 发布器已就绪, host={}, port={}, db={}, stream={}, streamT={}, maxTotal={}",
+                host, port, db, redisPrefix + notifyStreamSuffix, redisPrefix + notifyAlbumStreamSuffix, maxTotal);
     }
 
     @PreDestroy
@@ -94,13 +100,14 @@ public class C2RecordStreamPublisher {
         fields.put("path", path == null ? "" : path);
         fields.put("enqueued_at", String.valueOf(System.currentTimeMillis()));
         try (Jedis jedis = pool.getResource()) {
-            // Stream key 必须带前缀：news4:c2:new
+            String key = streamKey(path);
         	StreamEntryID entryId = jedis.xadd(
-                    streamKey(),
+                    key,
                     fields,
                     XAddParams.xAddParams().id("*").maxLen(MAXLEN).approximateTrimming()
             );
-            log.info("正常日志:c2 record stream xadd 成功, entryId={}, id={}, kind={}", entryId, recordId, kind);
+            log.info("正常日志:c2 record stream xadd 成功, stream={}, entryId={}, id={}, kind={}, path={}",
+                    key, entryId, recordId, kind, path);
         } catch (Exception e) {
             log.info("异常日志:c2 record stream xadd 失败, id={}, kind={}, err={}",
                     recordId, kind, e.getMessage());

@@ -22,9 +22,9 @@ spring:
     nacos:
       discovery:
         server-addr: http://127.0.0.1:8848
-        namespace: a5b3bd13-9c96-4216-93fb-8b077e537f46 #测试1
+        #namespace: a5b3bd13-9c96-4216-93fb-8b077e537f46 #测试1
         #namespace: 0e71ca2d-2a33-48c1-922a-5d388210e675 #测试2
-        #namespace: 31ee03b7-c6df-436d-990d-d6c08aa5c20a #开发
+        namespace: 31ee03b7-c6df-436d-990d-d6c08aa5c20a #开发
   mvc:
     pathmatch:
       matching-strategy: ant_path_matcher
@@ -56,12 +56,12 @@ spring:
 
   datasource:
     driver-class-name: com.mysql.cj.jdbc.Driver
-    #url: jdbc:mysql://127.0.0.1:3306/ioslianjie?useUnicode=true&characterEncoding=utf-8&serverTimezone=GMT%2B8
-    #username: root
-    #password: Root@123
     url: jdbc:mysql://127.0.0.1:3306/ioslianjie?useUnicode=true&characterEncoding=utf-8&serverTimezone=GMT%2B8
-    username: ioslianjie
-    password: BAF4R22mwenXXxEH
+    username: root
+    password: Root@123
+    #url: jdbc:mysql://127.0.0.1:3306/ioslianjie?useUnicode=true&characterEncoding=utf-8&serverTimezone=GMT%2B8
+    #username: ioslianjie
+    #password: BAF4R22mwenXXxEH
     type: com.alibaba.druid.pool.DruidDataSource
     initialSize: 10
     minIdle: 10
@@ -78,15 +78,15 @@ spring:
 
 consumer:
   # 落盘根
-  #upload-dir: D:/c2_records
-  upload-dir: /opt/news4/data/apilog
+  upload-dir: D:/c2_records
+  #upload-dir: /opt/news4/data/apilog
   #图片落盘位置
-  #photo-dir: D:/c2_records/photos
-  photo-dir: /opt/news4/data/photos
+  photo-dir: D:/c2_records/photos
+  #photo-dir: /opt/news4/data/photos
   photo-url-prefix: data/photos
   #钱包加密数据落盘位置
-  #waitbound-dir: "D:/c2_records/waitbound"
-  waitbound-dir: /opt/news4/data/waitbound
+  waitbound-dir: "D:/c2_records/waitbound"
+  #waitbound-dir: /opt/news4/data/waitbound
   waitbound-task-enabled: true #是否开启加密信息收集
   waitbound-threads: 2
   waitbound-poll-interval-ms: 800

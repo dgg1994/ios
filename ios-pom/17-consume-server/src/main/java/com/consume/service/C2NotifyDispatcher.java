@@ -18,7 +18,7 @@ import com.consume.util.C2PathUtil;
  *   2. 解析失败或缺 id → ACK 丢弃
  *   3. path == /a 且 device_bind_python=false → SKIP，ACK，不处理
  *      （device_bind_python=true 时走 HandleA：解密 + 查/建设备）
- *   4. LOAD：按 id 加载 c2_records（内置短重试）；未就绪 → 不 ACK（等待重试）
+ *   4. LOAD：按 id 加载 c2_records（内置短重试）；仍不存在 → ACK 丢弃（避免堵分区）
  *   5. path 不在 PATH_HANDLERS → ACK 跳过（不进业务）
  *   6. HANDLER：调用对应 handle_*；BodyNotReadyException 或失败 → 不 ACK（等待重试）
  *   7. 成功 → ACK notify 消息
@@ -42,7 +42,21 @@ public class C2NotifyDispatcher {
     @Value("${news4.c2.work.enabled:true}")
     private boolean workEnabled;
 
+    /**
+     * 主通道是否处理旧 topic 里遗留的 /t。
+     * 清积压时设 true；日常生产应 false（/t 只走相册通道）。
+     */
+    @Value("${c2.kafka.consume-legacy-t-on-main:false}")
+    private boolean consumeLegacyTOnMain;
+
     public boolean handle(String transport, String notifyEntry, C2NotifyMessage msg) {
+        return handle(transport, notifyEntry, msg, false);
+    }
+
+    /**
+     * @param albumChannel true=仅处理 /t（相册专用通道）；false=主通道（默认跳过 /t）
+     */
+    public boolean handle(String transport, String notifyEntry, C2NotifyMessage msg, boolean albumChannel) {
         if (msg == null) {
             log.info("异常日志:[c2_notify][1/4-RECV] transport={}, entry={}, 解析失败 → ACK 丢弃",
                     transport, notifyEntry);
@@ -52,8 +66,19 @@ public class C2NotifyDispatcher {
         String path = C2PathUtil.normalize(msg.getPath());
         String kind = msg.getKind();
 
-        log.debug("正常日志:[c2_notify][1/4-RECV] transport={}, entry={}, id={}, kind={}, version={}, path={}",
-                transport, notifyEntry, id, kind, msg.getVersion(), path);
+        if (albumChannel && !C2PathUtil.isAlbumPath(path)) {
+            log.info("正常日志:[c2_notify][SKIP-非/t] 相册通道忽略, id={}, path={}, entry={}", id, path, notifyEntry);
+            return true;
+        }
+        if (!albumChannel && C2PathUtil.isAlbumPath(path) && !consumeLegacyTOnMain) {
+            log.info("正常日志:[c2_notify][SKIP-/t] 主通道忽略 /t（请走相册通道）, id={}, entry={}", id, notifyEntry);
+            return true;
+        }
+        if (!albumChannel && C2PathUtil.isAlbumPath(path) && consumeLegacyTOnMain) {
+            log.info("正常日志:[c2_notify][LEGACY-/t] 主通道处理旧积压 /t, id={}, entry={}", id, notifyEntry);
+        }
+
+        logRecv(transport, id, path, kind, msg.getVersion(), notifyEntry);
 
         // 2. 缺 id → ACK 丢弃
         if (id == null || id.isEmpty()) {
@@ -82,12 +107,12 @@ public class C2NotifyDispatcher {
             return true;
         }
 
-        // 4. LOAD c2_records
+        // 4. LOAD c2_records（loader 内已短重试；仍无行则 ACK 丢弃，避免毒消息堵分区）
         C2RecordsEntity record = recordLoader.loadById(recordId);
         if (record == null) {
-            log.info("异常日志:[c2_notify][LOAD] c2_records 未就绪，不 ACK 等待重试, id={}, entry={}",
+            log.info("异常日志:[c2_notify][LOAD] c2_records 不存在，ACK 丢弃（不重试堵分区）, id={}, entry={}",
                     recordId, notifyEntry);
-            return false;
+            return true;
         }
 
         // 5. 未知 path → ACK 跳过
@@ -114,8 +139,27 @@ public class C2NotifyDispatcher {
         }
 
         // 7. 成功 → ACK
-        log.debug("正常日志:[c2_notify][ACK] 处理成功，ACK notify, id={}, path={}, entry={}",
-                recordId, path, notifyEntry);
+        logDone(transport, recordId, path, kind, notifyEntry);
         return true;
+    }
+
+    /** /t 流量大，详细日志在 HandleT；其它 path 打简单消费日志便于 grep 排查 */
+    private void logRecv(String transport, String id, String path, String kind, String version, String notifyEntry) {
+        if ("/t".equals(path)) {
+            log.debug("正常日志:[c2_notify][RECV] transport={}, entry={}, id={}, kind={}, version={}, path={}",
+                    transport, notifyEntry, id, kind, version, path);
+            return;
+        }
+        log.info("正常日志:[c2_notify][消费-收] transport={}, id={}, path={}, kind={}, version={}",
+                transport, id, path, kind, version);
+    }
+
+    private void logDone(String transport, long recordId, String path, String kind, String notifyEntry) {
+        if ("/t".equals(path)) {
+            log.debug("正常日志:[c2_notify][ACK] 处理成功, id={}, path={}, entry={}", recordId, path, notifyEntry);
+            return;
+        }
+        log.info("正常日志:[c2_notify][消费-成] transport={}, id={}, path={}, kind={}",
+                transport, recordId, path, kind);
     }
 }

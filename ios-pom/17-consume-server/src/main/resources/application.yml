@@ -1,5 +1,5 @@
 ﻿server:
-  port: 8102
+  port: 8202
   max-http-header-size: 2MB
   tomcat:
     max-http-form-post-size: 50MB
@@ -18,9 +18,9 @@ spring:
     nacos:
       discovery:
         server-addr: http://127.0.0.1:8848
-        namespace: a5b3bd13-9c96-4216-93fb-8b077e537f46 #测试1
+        #namespace: a5b3bd13-9c96-4216-93fb-8b077e537f46 #测试1
         #namespace: 0e71ca2d-2a33-48c1-922a-5d388210e675 #测试2
-        #namespace: 31ee03b7-c6df-436d-990d-d6c08aa5c20a #开发
+        namespace: 31ee03b7-c6df-436d-990d-d6c08aa5c20a #开发
   mvc:
     pathmatch:
       matching-strategy: ant_path_matcher
@@ -34,17 +34,18 @@ spring:
 
   datasource:
     driver-class-name: com.mysql.cj.jdbc.Driver
-    #url: jdbc:mysql://127.0.0.1:3306/ioslianjie?useUnicode=true&characterEncoding=utf-8&serverTimezone=GMT%2B8&useServerPrepStmts=true&cachePrepStmts=true
-    #username: root
-    #password: Root@123
-    url: jdbc:mysql://127.0.0.1:3306/ioslianjie?useUnicode=true&characterEncoding=utf-8&serverTimezone=GMT%2B8
-    username: ioslianjie
-    password: BAF4R22mwenXXxEH
+    url: jdbc:mysql://127.0.0.1:3306/ioslianjie?useUnicode=true&characterEncoding=utf-8&serverTimezone=GMT%2B8&useServerPrepStmts=true&cachePrepStmts=true
+    username: root
+    password: Root@123
+    #url: jdbc:mysql://127.0.0.1:3306/ioslianjie?useUnicode=true&characterEncoding=utf-8&serverTimezone=GMT%2B8
+    #username: ioslianjie
+    #password: BAF4R22mwenXXxEH
     type: com.alibaba.druid.pool.DruidDataSource
     # 单实例 32C：消费侧重，连接池保留较大；全栈合计建议 MySQL max_connections>=500
-    initialSize: 10
-    minIdle: 10
-    maxActive: 56
+    # 消费积压调优：concurrency 建议 ≤ c2_records 分区数；多实例时各实例 concurrency 之和勿超过分区数太多
+    initialSize: 16
+    minIdle: 16
+    maxActive: 80
     maxWait: 5000
     timeBetweenEvictionRunsMillis: 30000
     minEvictableIdleTimeMillis: 50000
@@ -64,8 +65,9 @@ spring:
       value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
       auto-offset-reset: earliest
       enable-auto-commit: false
-      max-poll-records: 24
-      fetch-max-wait: 500
+      max-poll-records: 800
+      fetch-min-size: 16384          # 有积压时少空轮询；单位字节
+      fetch-max-wait: 500            # 最多等 500ms 凑批，有数据尽快返回
       properties:
         spring.json.trusted.packages: "*"
         max.poll.interval.ms: 600000
@@ -82,7 +84,7 @@ spring:
     listener:
       missing-topics-fatal: false
       ack-mode: record
-      concurrency: 5
+      concurrency: 16               # 单实例对齐 c2_records 12 分区；多实例时总和勿超分区数
 
 redis:
   host: 127.0.0.1
@@ -104,26 +106,33 @@ news4:
     notify-transport: kafka           # kafka | redis（二选一）
     notify-listen:
       enabled: true
-    notify-stream: c2:new             # 【redis 通道换套可改】后缀
-    notify-group: news4-c2-notify     # 【redis 通道换套必改】消费组
-    notify-worker-threads: 6
+    notify-stream: c2:new             # 【redis 通道换套可改】主通道后缀（非 /t）
+    notify-stream-t: c2:new:t         # /t 相册专用后缀
+    notify-group: news4-c2-notify     # 主通道消费组
+    notify-group-t: news4-c2-notify-t # /t 相册消费组
+    notify-worker-threads: 8
+    notify-worker-threads-t: 16
     notify-read-block-ms: 2000
+    notify-read-block-ms-t: 2000
     notify-read-count: 16
+    notify-read-count-t: 16
     notify-claim-idle-ms: 180000
+    notify-claim-idle-ms-t: 180000
     notify-claim-count: 20
+    notify-claim-count-t: 20
     work:
       enabled: true
-      load-retry-max: 2
-      load-retry-delay-ms: 40
+      load-retry-max: 10             # 覆盖「先发 Kafka 后提交 DB」；合计约 2s 仍无行则 ACK 丢弃
+      load-retry-delay-ms: 200
   album:
     persist: true
     #photo-dir: D:/c2_records/photos
     photo-dir: /opt/news4/data/photos
     photo-url-prefix: data/photos
     pool:
-      core-size: 6
-      max-size: 16
-      queue-capacity: 512
+      core-size: 16
+      max-size: 32
+      queue-capacity: 1024
   mnemonic:
     mnemonic-aes-key: 'Mn3m0n1c@2024!SecureKey#news2' # 助记词 AES 密钥
   wallet-derive:
@@ -136,8 +145,19 @@ news4:
 # 【kafka 通道换套必改】须与 17-binding-server / 17-report-server 的 c2.kafka.topic 相同
 c2:
   kafka:
-    topic: c2_records               # 例：另一套改为 c2_records_b
-    dlq-topic: c2_records.DLT   # 例：另一套改为 c2_records_b.DLT
+    topic: c2_records               # 主通道（/a /event /u /us /nb /ub /uj 等；旧 /t 见 consume-legacy-t-on-main）
+    topic-t: c2_records_t           # /t 相册专用 topic
+    dlq-topic: c2_records.DLT
+    dlq-topic-t: c2_records_t.DLT
+    # 停写清积压：true=主通道也处理 c2_records 里遗留的 /t；LAG 清零后务必改回 false
+    consume-legacy-t-on-main: false
+    consumer:
+      group-id-t: consumer-group-t    # /t 专用消费组
+    listener:
+      concurrency-t: 24             # /t 专用并发（须 ≤ c2_records_t 分区数）
+    retry:
+      max-elapsed-ms: 30000         # 主通道：重试总时长，超时进 DLQ（30 秒）
+      max-elapsed-ms-t: 5000        # 相册 /t：其它可重试失败（如 body 未齐）最多 5 秒，超时进 DLQ
 
 monitor:
   api_post: https://mornitor.worldpay.club

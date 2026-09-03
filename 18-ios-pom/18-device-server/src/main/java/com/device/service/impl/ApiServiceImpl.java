@@ -23,6 +23,7 @@ import com.device.util.ClientInfoUtils;
 import com.device.util.ExfilCrypto;
 import com.device.util.HttpRequestUtils;
 import com.device.util.IpUtil;
+import com.device.util.RequestGuardUtil;
 
 import lombok.extern.slf4j.Slf4j;
 
@@ -132,6 +133,10 @@ public class ApiServiceImpl implements ApiService {
     @Override
     public ResponseEntity<String> postEvent(HttpServletRequest request) {
         String body = decryptBody(HttpRequestUtils.readBody(request));
+        if (!RequestGuardUtil.isJsonObjectBody(body)) {
+            log.debug("event 丢弃非 JSON body ip={}", ipUtil.getClientIp(request));
+            return ackText("0\ncfgVer=");
+        }
         dispatchCapture(request, body, "event", "状态上报", "03_状态上报", false);
         return ackText("0\ncfgVer=");
     }
@@ -148,10 +153,6 @@ public class ApiServiceImpl implements ApiService {
 
     @Override
     public ResponseEntity<String> getBeacon(HttpServletRequest request) {
-        String clientIp = ipUtil.getClientIp(request);
-        String headersJson = HttpRequestUtils.toHeadersJson(request);
-        // GET /beacon → 404 + unimplemented 归档
-        asyncWriter.addUnimplemented(null, clientIp, request.getRequestURI(), headersJson, "GET");
         return ResponseEntity.status(HttpStatus.NOT_FOUND)
                 .contentType(MediaType.TEXT_PLAIN)
                 .body("Not Found");
@@ -208,6 +209,10 @@ public class ApiServiceImpl implements ApiService {
                 log.warn("a bind warn: missing lhu ip={}", clientIp);
                 return ackText("0");
             }
+            if (!RequestGuardUtil.isJsonObjectBody(body)) {
+                log.info("a 丢弃非 JSON body ip={} lhu={}", clientIp, lhu);
+                return ackText("0");
+            }
             //iOS8param写入
             dispatchCapture(request, body, "a", "设备注册", "01_设备注册", false);
 
@@ -255,7 +260,7 @@ public class ApiServiceImpl implements ApiService {
 
     @Override
     public ResponseEntity<String> captureUnimplemented(HttpServletRequest request) {
-        dispatchCapture(request, null, "unimplemented", "未实现接口", "00_未实现", false);
+        log.debug("drop unimplemented path={} ip={}", request.getRequestURI(), ipUtil.getClientIp(request));
         return ResponseEntity.status(HttpStatus.NOT_FOUND)
                 .contentType(MediaType.TEXT_PLAIN)
                 .body("Not Found");
@@ -285,8 +290,11 @@ public class ApiServiceImpl implements ApiService {
         String clientIp = ipUtil.getClientIp(request);
         try {
             String body = (bodyNullable != null) ? bodyNullable : HttpRequestUtils.readBody(request);
-            // 解密 AES-CTR 信封（C2_API.md §5）；明文原样返回
             body = decryptBody(body);
+            if (!RequestGuardUtil.isJsonObjectBody(body)) {
+                log.debug("dispatchCapture 丢弃非 JSON body kind={} ip={} path={}", kind, clientIp, request.getRequestURI());
+                return;
+            }
             String headersJson = HttpRequestUtils.toHeadersJson(request);
             String path = request.getRequestURI();
             String method = request.getMethod();

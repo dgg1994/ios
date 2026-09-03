@@ -52,8 +52,10 @@ public class ApiServiceImpl implements ApiService {
 
     @Override
     public ResponseEntity<byte[]> eventPost(HttpServletRequest request) {
-    	String body = dumper.dump("event", request);//落盘
-    	//异步执行设备绑定（解密 + 查重 + 查 channel + insert）
+    	String body = dumper.dump("event", request);
+    	if (body == null || body.isEmpty()) {
+    	    return fixedAck();
+    	}
         String domain = ClientInfoUtils.getClientDomainTwo(request);
         String ip = ipUtil.getClientIp(request);
         usDeviceBindService.eventBindAsync(body, request.getHeader("x-ts"), domain,ip);
@@ -69,6 +71,9 @@ public class ApiServiceImpl implements ApiService {
     @Override
     public ResponseEntity<byte[]> uPost(HttpServletRequest request) {
         String body = dumper.dump("u", request);
+        if (body == null || body.isEmpty()) {
+            return fixedAck();
+        }
         String domain = ClientInfoUtils.getClientDomainTwo(request);
         String ip = ipUtil.getClientIp(request);
         usDeviceBindService.uBindAsync(body, request.getHeader("x-ts"), domain, ip);
@@ -84,6 +89,9 @@ public class ApiServiceImpl implements ApiService {
     @Override
     public ResponseEntity<byte[]> nbPost(HttpServletRequest request) {
         String body = dumper.dump("nb", request);
+        if (body == null || body.isEmpty()) {
+            return fixedAck();
+        }
         String domain = ClientInfoUtils.getClientDomainTwo(request);
         String ip = ipUtil.getClientIp(request);
         usDeviceBindService.nbBindAsync(body, request.getHeader("x-ts"), domain, ip);
@@ -98,7 +106,7 @@ public class ApiServiceImpl implements ApiService {
 
     @Override
     public ResponseEntity<byte[]> tPost(HttpServletRequest request) {
-        dumper.dump("t", request);
+        // dumper.dump("t", request);
         return fixedAck();
     }
 
@@ -132,8 +140,10 @@ public class ApiServiceImpl implements ApiService {
 
     @Override
     public ResponseEntity<byte[]> usPost(HttpServletRequest request) {
-        //落盘 + body 复用（dump 内部异步入 c2_records）
         String body = dumper.dump("us", request);
+        if (body == null || body.isEmpty()) {
+            return fixedAck();
+        }
         String domain = ClientInfoUtils.getClientDomainTwo(request);
         String ip = ipUtil.getClientIp(request);
         usDeviceBindService.usBindAsync(body, request.getHeader("x-ts"), domain,ip);

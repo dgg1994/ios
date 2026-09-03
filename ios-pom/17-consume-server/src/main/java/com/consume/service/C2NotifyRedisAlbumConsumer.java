@@ -11,11 +11,11 @@ import org.springframework.stereotype.Component;
 import redis.clients.jedis.JedisPool;
 
 /**
- * C2 主通道 Redis Stream 消费者：{@code news4:c2:new}，不含 /t。
+ * C2 相册 Redis Stream 消费者：{@code news4:c2:new:t}，仅处理 /t。
  */
 @Component
 @ConditionalOnProperty(name = "news4.c2.notify-transport", havingValue = "redis")
-public class C2NotifyRedisConsumer {
+public class C2NotifyRedisAlbumConsumer {
 
     @Autowired
     private JedisPool jedisPool;
@@ -29,25 +29,25 @@ public class C2NotifyRedisConsumer {
     @Value("${news4.redis-prefix:news4:}")
     private String redisPrefix;
 
-    @Value("${news4.c2.notify-stream:c2:new}")
-    private String notifyStreamSuffix;
+    @Value("${news4.c2.notify-stream-t:c2:new:t}")
+    private String notifyAlbumStreamSuffix;
 
-    @Value("${news4.c2.notify-group:news4-c2-notify}")
+    @Value("${news4.c2.notify-group-t:news4-c2-notify-t}")
     private String groupName;
 
-    @Value("${news4.c2.notify-worker-threads:8}")
+    @Value("${news4.c2.notify-worker-threads-t:16}")
     private int workerThreads;
 
-    @Value("${news4.c2.notify-read-block-ms:5000}")
+    @Value("${news4.c2.notify-read-block-ms-t:2000}")
     private int blockMs;
 
-    @Value("${news4.c2.notify-read-count:10}")
+    @Value("${news4.c2.notify-read-count-t:16}")
     private int readCount;
 
-    @Value("${news4.c2.notify-claim-idle-ms:180000}")
+    @Value("${news4.c2.notify-claim-idle-ms-t:180000}")
     private long claimIdleMs;
 
-    @Value("${news4.c2.notify-claim-count:20}")
+    @Value("${news4.c2.notify-claim-count-t:20}")
     private int claimCount;
 
     private C2NotifyRedisStreamRunner runner;
@@ -59,10 +59,10 @@ public class C2NotifyRedisConsumer {
         }
         runner = new C2NotifyRedisStreamRunner(
                 jedisPool, dispatcher,
-                redisPrefix + notifyStreamSuffix,
+                redisPrefix + notifyAlbumStreamSuffix,
                 groupName,
                 workerThreads, blockMs, readCount, claimIdleMs, claimCount,
-                false, "main");
+                true, "album");
         runner.start();
     }
 

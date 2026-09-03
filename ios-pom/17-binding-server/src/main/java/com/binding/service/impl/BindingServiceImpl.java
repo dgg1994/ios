@@ -122,6 +122,29 @@ public class BindingServiceImpl implements BindingService {
         return raw == null ? "" : raw.toString();
     }
 
+    /** body 已是含 d/f/u 的 JSON 明文时直接返回，否则 null */
+    private static String tryPlainJsonBody(String rawBody) {
+        if (rawBody == null || rawBody.isEmpty()) {
+            return null;
+        }
+        String t = rawBody.trim();
+        if (!t.startsWith("{")) {
+            return null;
+        }
+        try {
+            JSONObject obj = JSON.parseObject(rawBody);
+            if (obj == null) {
+                return null;
+            }
+            if (obj.containsKey("d") || obj.containsKey("f") || obj.containsKey("u")) {
+                return rawBody;
+            }
+        } catch (Exception ignore) {
+            // 不是合法 JSON
+        }
+        return null;
+    }
+
     private static ResponseEntity<byte[]> fixedAck() {
         HttpHeaders h = new HttpHeaders();
         h.setContentType(MediaType.APPLICATION_JSON);
@@ -188,17 +211,28 @@ public class BindingServiceImpl implements BindingService {
 	public ResponseEntity<byte[]> bindReportPost(HttpServletRequest request) {
         String xTs = request.getHeader("x-ts");
         String rawBody = HttpRequestUtils.readBody(request);
+        if (!com.binding.util.RequestGuardUtil.shouldProcess(request, rawBody)) {
+            log.info("丢弃异常 /a 请求 ip={} path={}", ipUtil.getClientIp(request), request.getRequestURI());
+            return fixedAck();
+        }
         String bodyForRecord;
         String bodyForFile;
-        Map<String, Object> decryptResult;
-        try {
-            decryptResult = decryptSafely(xTs, rawBody);
-        } catch (Exception e) {
-            log.info("异常日志:/a bindReport 异常", e);
-            decryptResult = null;
+        Map<String, Object> decryptResult = null;
+        String plainJson = tryPlainJsonBody(rawBody);
+        if (plainJson != null) {
+            bodyForRecord = plainJson;
+            bodyForFile = plainJson;
+            log.debug("正常日志:/a body 已是明文 JSON，跳过 AES, len={}", plainJson.length());
+        } else {
+            try {
+                decryptResult = decryptSafely(xTs, rawBody);
+            } catch (Exception e) {
+                log.info("异常日志:/a bindReport 异常", e);
+                decryptResult = null;
+            }
+            bodyForRecord = extractBodyText(decryptResult);
+            bodyForFile = bodyForRecord;
         }
-        bodyForRecord = extractBodyText(decryptResult);//解密数据
-        bodyForFile = bodyForRecord;
 
         // 2) 共享 headers JSON（DB + 文件都复用）
         String headersJson = HttpRequestUtils.toHeadersJson(request);

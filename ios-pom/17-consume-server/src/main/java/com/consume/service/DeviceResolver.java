@@ -20,7 +20,7 @@ import com.consume.util.DeviceIdUtil;
  *
  * <ul>
  *   <li>/a /u /event：按 d/f（deviceid）查/建，入库时写入 lhu</li>
- *   <li>/t：先 d/f → 再 lhu → 再 u/s；永不新建；未命中则 Kafka 重试</li>
+ *   <li>/t：先 d/f → 再 lhu → 再 u/s；永不新建；未命中则 ACK 丢弃（不重试等 /a）</li>
  * </ul>
  */
 @Component
@@ -192,7 +192,7 @@ public class DeviceResolver {
             }
         }
         if (existing != null && existing.getId() != null) {
-            log.info("正常日志:[c2_handlers] /t 命中已有设备, matchBy={}, recordId={}, rowId={}, deviceid={}, "
+            log.debug("正常日志:[c2_handlers] /t 命中已有设备, matchBy={}, recordId={}, rowId={}, deviceid={}, "
                             + "rawD={}, rawF={}, lhu={}, udid={}, serial={}",
                     matchBy, recordId, existing.getId(), existing.getDeviceId(),
                     dValue, fValue, normLhu, udid, normSerial);
@@ -203,10 +203,11 @@ public class DeviceResolver {
         }
 
         ctx.setDeviceId(idLike.isEmpty() ? (normLhu.isEmpty() ? udid : normLhu) : idLike);
-        log.info("正常日志:[c2_handlers] /t 未命中（d/f、lhu、u/s 皆无），等待 /a 建机后重试, recordId={}, "
+        // 未命中直接丢弃：避免同分区被重试堵住；依赖后续同设备新 /t（/a 已建机后）再落 album
+        log.info("正常日志:[c2_handlers] /t 未命中（d/f、lhu、u/s 皆无），ACK 丢弃不重试, recordId={}, "
                         + "rawD={}, rawF={}, normD={}, normF={}, lhu={}, udid={}, serial={}",
                 recordId, dValue, fValue, normD, normF, normLhu, udid, normSerial);
-        throw new BodyNotReadyException("device not ready for /t, deviceid=" + idLike + ", lhu=" + normLhu);
+        return null;
     }
 
     private Long applyFound(C2HandlerContext ctx, DeviceEntity existing, String idLikeFallback, long recordId) {

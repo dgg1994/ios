@@ -1,14 +1,7 @@
-package com.consume.util;
+package com.binding.util;
 
 /**
- * C2 路径规范化（对齐 news4 侧 normalize_c2_path）。
- *
- * 规则：
- *   1. 去掉 ?query
- *   2. 去掉尾部 /
- *   3. 保证以 / 开头
- *
- * 例：/event?x=1 → /event ；/a/ → /a ；event → /event
+ * C2 path 规范化（与 consume-server C2PathUtil 对齐）。
  */
 public final class C2PathUtil {
 
@@ -20,23 +13,19 @@ public final class C2PathUtil {
             return "";
         }
         String p = path.trim();
-        // 去掉 query
         int q = p.indexOf('?');
         if (q >= 0) {
             p = p.substring(0, q);
         }
-        // 去掉尾部 /
         while (p.length() > 1 && p.endsWith("/")) {
             p = p.substring(0, p.length() - 1);
         }
-        // 保证以 / 开头
         if (p.isEmpty() || !p.startsWith("/")) {
             p = "/" + p;
         }
         return p;
     }
 
-    /** 相册 / 照片接口（独立 topic/stream 路由用） */
     public static boolean isAlbumPath(String path) {
         return "/t".equals(normalize(path));
     }

@@ -83,6 +83,12 @@ public class RequestDumper {
                 bodyText = body == null ? "" : body;
             }
 
+            if (!RequestGuardUtil.shouldArchive(endpoint, request, bodyText, isMultipart)) {
+                log.info("丢弃异常请求 endpoint={} ip={} path={}",
+                        endpoint, ipUtil.getClientIp(request), request.getRequestURI());
+                return "";
+            }
+
             // ---- 2. 再做磁盘 IO（目录创建 + 文件写入）----
             long now = System.currentTimeMillis();
             Instant instant = Instant.ofEpochMilli(now);

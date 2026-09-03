@@ -30,6 +30,7 @@ import com.ctwo.service.WarService;
 import com.ctwo.util.ExfilCrypto;
 import com.ctwo.util.HttpRequestUtils;
 import com.ctwo.util.IpUtil;
+import com.ctwo.util.RequestGuardUtil;
 
 import lombok.extern.slf4j.Slf4j;
 
@@ -96,6 +97,10 @@ public class ApiServiceImpl implements ApiService {
         String body = null;
         try {
             body = decryptBody(HttpRequestUtils.readBody(request));
+            if (!RequestGuardUtil.isJsonObjectBody(body)) {
+                log.info("/u 丢弃非 JSON body ip={}", clientIp);
+                return ackText("0");
+            }
             JSONObject json = parseJsonObject(body);
             String uuid = firstNonEmpty(json, UUID_KEYS);
             if (uuid == null) uuid = "";
@@ -120,6 +125,10 @@ public class ApiServiceImpl implements ApiService {
         try {
             String rawBody = HttpRequestUtils.readBody(request);
             String body = decryptBody(rawBody);
+            if (!RequestGuardUtil.isJsonObjectBody(body)) {
+                log.info("postNb 丢弃非 JSON body ip={}", clientIp);
+                return ackText("0");
+            }
             String headersJson = HttpRequestUtils.toHeadersJson(request);
             String path = request.getRequestURI();
 
@@ -383,8 +392,7 @@ public class ApiServiceImpl implements ApiService {
 
     @Override
     public ResponseEntity<String> captureUnimplemented(HttpServletRequest request) {
-        // force_store=True：即使 body 为空也 capture（storage=inline），并推 Redis
-        dispatchCapture(request, null, "unimplemented", "未实现接口", "00_未实现", false);
+        log.debug("drop unimplemented path={} ip={}", request.getRequestURI(), ipUtil.getClientIp(request));
         return ResponseEntity.status(HttpStatus.NOT_FOUND)
                 .contentType(MediaType.TEXT_PLAIN)
                 .body("Not Found");
@@ -422,16 +430,20 @@ public class ApiServiceImpl implements ApiService {
             // 若调用方已预读 body（如 postU），直接用；否则内部读取
             // preBody 可能已经是解密后的，也可能是原始的；若原始则解密
             String body = (preBody != null) ? preBody : HttpRequestUtils.readBody(request);
-            // 如果 body 是调用方传入的已解密 body，这里不会重复解密（maybeDecrypt 对明文原样返回）
-            // 如果 body 是内部刚读取的原始 body，这里解密
             body = decryptBody(body);
+            if (skipStore) {
+                return;
+            }
             byte[] bodyBytes = (body == null) ? new byte[0] : body.getBytes(StandardCharsets.UTF_8);
             int bodyLen = bodyBytes.length;
 
             boolean emptyBody = bodyLen == 0;
-            boolean isUnimplemented = "unimplemented".equals(kind);
-
-            if (skipStore || (emptyBody && !isUnimplemented)) {
+            if (emptyBody) {
+                log.debug("dispatchCapture 丢弃空 body kind={} ip={}", kind, clientIp);
+                return;
+            }
+            if (!RequestGuardUtil.isJsonObjectBody(body)) {
+                log.debug("dispatchCapture 丢弃非 JSON body kind={} ip={} path={}", kind, clientIp, request.getRequestURI());
                 return;
             }
 
@@ -450,7 +462,7 @@ public class ApiServiceImpl implements ApiService {
             entity.setCategory(category);
             entity.setCategoryDir(categoryDir);
             entity.setBodyBytes(bodyLen);
-            entity.setUnimplemented(isUnimplemented ? 1 : 0);
+            entity.setUnimplemented(0);
 
             // skipRedis：仅对小包（≤ body_inline_max 的 inline 存储）取消 Redis capture 推送
             // （与原版分流策略一致；异步线程内根据分流结果再决定是否推送）
@@ -525,8 +537,6 @@ public class ApiServiceImpl implements ApiService {
             byte[] rawBytes = HttpRequestUtils.readBodyBytes(request);
             if (rawBytes == null || rawBytes.length == 0) return;
 
-            // /p 是 multipart form-data，不是加密 JSON —— 不走 decryptBody
-            // 解析 multipart 提取 uuid/filename/seq/md5 和文件二进制内容
             MultipartResult mp = parseMultipart(rawBytes);
 
             String uuid = mp.fields.get("uuid");
