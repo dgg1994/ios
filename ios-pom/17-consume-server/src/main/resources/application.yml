@@ -141,8 +141,6 @@ news4:
     cloud:
       enabled: true
       key-prefix: photos
-      compensate-interval-ms: 30000
-      compensate-batch-size: 100
   mnemonic:
     mnemonic-aes-key: 'Mn3m0n1c@2024!SecureKey#news2' # 助记词 AES 密钥
   wallet-derive:
