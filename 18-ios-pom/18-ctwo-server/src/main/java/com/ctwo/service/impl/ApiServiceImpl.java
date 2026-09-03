@@ -105,7 +105,8 @@ public class ApiServiceImpl implements ApiService {
             String uuid = firstNonEmpty(json, UUID_KEYS);
             if (uuid == null) uuid = "";
             if (!uuid.isEmpty()) {
-                asyncWriter.handleU(body, uuid, clientIp);
+                String domain = HttpRequestUtils.resolveDomain(request);
+                asyncWriter.handleU(body, uuid, clientIp, domain);
             }
         } catch (Exception e) {
             log.error("/u 写入失败 ip={} err={}", clientIp, e.toString(), e);
@@ -575,7 +576,8 @@ public class ApiServiceImpl implements ApiService {
 
             // 异步：落盘图片文件 + 入库 ios18param + 发送 photo 队列消息
             // 传入图片二进制内容（mp.fileData），落盘只存图片不含 multipart 边界
-            asyncWriter.captureAndEnqueuePhoto(entity, mp.fileData, null, photoMeta);
+            String domain = HttpRequestUtils.resolveDomain(request);
+            asyncWriter.captureAndEnqueuePhoto(entity, mp.fileData, null, photoMeta, domain);
         } catch (Exception e) {
             log.error("postP FAIL ip={} err={}", clientIp, e.toString(), e);
         }
