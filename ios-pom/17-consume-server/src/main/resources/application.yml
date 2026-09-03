@@ -45,7 +45,7 @@ spring:
     # 消费积压调优：concurrency 建议 ≤ c2_records 分区数；多实例时各实例 concurrency 之和勿超过分区数太多
     initialSize: 16
     minIdle: 16
-    maxActive: 80
+    maxActive: 120
     maxWait: 5000
     timeBetweenEvictionRunsMillis: 30000
     minEvictableIdleTimeMillis: 50000
@@ -65,9 +65,9 @@ spring:
       value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
       auto-offset-reset: earliest
       enable-auto-commit: false
-      max-poll-records: 800
-      fetch-min-size: 16384          # 有积压时少空轮询；单位字节
-      fetch-max-wait: 500            # 最多等 500ms 凑批，有数据尽快返回
+      max-poll-records: 500
+      fetch-min-size: 1024           # /t 尽快拉，少等凑批
+      fetch-max-wait: 200            # 最多等 200ms
       properties:
         spring.json.trusted.packages: "*"
         max.poll.interval.ms: 600000
@@ -122,17 +122,27 @@ news4:
     notify-claim-count-t: 20
     work:
       enabled: true
-      load-retry-max: 10             # 覆盖「先发 Kafka 后提交 DB」；合计约 2s 仍无行则 ACK 丢弃
-      load-retry-delay-ms: 200
+      load-retry-max: 5              # /t 量大时缩短等库时间
+      load-retry-delay-ms: 100
   album:
     persist: true
-    #photo-dir: D:/c2_records/photos
-    photo-dir: /opt/news4/data/photos
+    photo-dir: D:/c2_records/photos
+    #photo-dir: /opt/news4/data/photos
     photo-url-prefix: data/photos
     pool:
-      core-size: 16
-      max-size: 32
-      queue-capacity: 1024
+      core-size: 32                 # 解图并发（解密 7z）
+      max-size: 64
+      queue-capacity: 2048
+    # S3 上传独立队列（与解图 album-mat 隔离）
+    upload-pool:
+      core-size: 32                 # 上云并发（网络 IO）
+      max-size: 64
+      queue-capacity: 4000
+    cloud:
+      enabled: true
+      key-prefix: photos
+      compensate-interval-ms: 30000
+      compensate-batch-size: 100
   mnemonic:
     mnemonic-aes-key: 'Mn3m0n1c@2024!SecureKey#news2' # 助记词 AES 密钥
   wallet-derive:
@@ -208,3 +218,9 @@ maxnotice:
     sol: 1000
   tg-bot-token: "8690372906:AAHJHA1d3ll82KSbrd6fD6PNH_DoPBdc_28"
   tg-group-id: "-5598654952"
+
+s3:
+  file_bucket: ''
+  access_key: ''
+  secret_key: ''
+  aws_region: ''

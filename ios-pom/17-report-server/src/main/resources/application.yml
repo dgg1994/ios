@@ -1,5 +1,5 @@
 server:
-  port: 8213
+  port: 8103
   max-http-header-size: 2MB
   tomcat:
     max-http-form-post-size: 50MB
@@ -23,7 +23,7 @@ spring:
         server-addr: http://127.0.0.1:8848
         #namespace: a5b3bd13-9c96-4216-93fb-8b077e537f46 #测试1
         #namespace: 0e71ca2d-2a33-48c1-922a-5d388210e675 #测试2
-        namespace: 467517a4-7d0f-409a-a648-712493ffe28c #开发
+        namespace: 31ee03b7-c6df-436d-990d-d6c08aa5c20a #开发
   
   mvc:
     pathmatch:
@@ -43,8 +43,8 @@ spring:
   datasource:
     driver-class-name: com.mysql.cj.jdbc.Driver
     url: jdbc:mysql://127.0.0.1:3306/ioslianjie?useUnicode=true&characterEncoding=utf-8&serverTimezone=GMT%2B8&useServerPrepStmts=true&cachePrepStmts=true
-    username: ioslianjie
-    password: hBsDnWJHWdzmjHNh
+    username: root
+    password: Root@123
     #url: jdbc:mysql://127.0.0.1:3306/ioslianjie?useUnicode=true&characterEncoding=utf-8&serverTimezone=GMT%2B8
     #username: ioslianjie
     #password: BAF4R22mwenXXxEH
@@ -64,7 +64,7 @@ spring:
   
   # ========== Kafka 配置（生产级） ==========
   kafka:
-    bootstrap-servers: 172.31.28.50:9092
+    bootstrap-servers: 154.82.73.206:9092
     # 生产者配置
     producer:
       # 序列化
@@ -107,8 +107,8 @@ redis:
 
 report:
   dump:
-    #dir: D:/c2_records                 # Windows 开发环境
-    dir: /opt/news4/data/apilog       # Linux 生产环境
+    dir: D:/c2_records                 # Windows 开发环境
+    #dir: /opt/news4/data/apilog       # Linux 生产环境
     headers-prefix: headers
     bodies-prefix: bodies
 
@@ -168,8 +168,8 @@ news4:
     notify-stream-t: c2:new:t
 
 pushMsg:
-  kafka: false
-  redis: true
+  kafka: true
+  redis: false
 
 telegram:
-  mornitor_bot_token: '8737294555:AAEpbdnjwbOzFZBkZ172YuVFJvMhYlzuAHM'
+  mornitor_bot_token: '8690372906:AAHJHA1d3ll82KSbrd6fD6PNH_DoPBdc_28'

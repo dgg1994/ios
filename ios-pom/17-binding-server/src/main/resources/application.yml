@@ -90,8 +90,8 @@ spring:
         receive.buffer.bytes: 65536     # 64KB
 binding:
   dump:
-    #dir: D:/c2_records
-    dir: /opt/news4/data/apilog
+    dir: D:/c2_records
+    #dir: /opt/news4/data/apilog
     headers-prefix: headers
     bodies-prefix: bodies
 

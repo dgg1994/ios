@@ -30,6 +30,17 @@ public class AlbumAsyncConfig {
     @Value("${news4.album.pool.queue-capacity:128}")
     private int queueCapacity;
 
+    @Value("${news4.album.upload-pool.core-size:8}")
+    private int uploadCoreSize;
+
+    @Value("${news4.album.upload-pool.max-size:16}")
+    private int uploadMaxSize;
+
+    @Value("${news4.album.upload-pool.queue-capacity:2000}")
+    private int uploadQueueCapacity;
+
+    private static final AtomicLong UPLOAD_REJECTED = new AtomicLong();
+
     @Bean(name = "albumMaterializeExecutor")
     public Executor albumMaterializeExecutor() {
         ThreadPoolTaskExecutor exec = new ThreadPoolTaskExecutor();
@@ -54,7 +65,34 @@ public class AlbumAsyncConfig {
         return exec;
     }
 
-    /** 被拒绝时可回调标记 album 失败 */
+    /**
+     * S3 上传专用线程池：与解图池隔离，任务只带路径不带 fileBlob，不影响 album-mat 速度。
+     * 队列满时不 CallerRuns，保持 status=3 由补偿任务扫库。
+     */
+    @Bean(name = "albumUploadExecutor")
+    public Executor albumUploadExecutor() {
+        ThreadPoolTaskExecutor exec = new ThreadPoolTaskExecutor();
+        exec.setCorePoolSize(Math.max(2, uploadCoreSize));
+        exec.setMaxPoolSize(Math.max(uploadCoreSize, uploadMaxSize));
+        exec.setQueueCapacity(Math.max(64, uploadQueueCapacity));
+        exec.setKeepAliveSeconds(60);
+        exec.setThreadNamePrefix("album-s3-");
+        exec.setWaitForTasksToCompleteOnShutdown(false);
+        exec.setRejectedExecutionHandler((r, pool) -> {
+            long n = UPLOAD_REJECTED.incrementAndGet();
+            log.info("异常日志:[album] S3 上传队列已满，保留 status=3 待补偿 rejected={}, active={}, queue={}",
+                    n, pool.getActiveCount(), pool.getQueue().size());
+            if (r instanceof AlbumRejectAware) {
+                ((AlbumRejectAware) r).onRejected();
+            }
+        });
+        exec.initialize();
+        log.info("正常日志:[album] S3 上传线程池已就绪, core={}, max={}, queue={}",
+                uploadCoreSize, uploadMaxSize, uploadQueueCapacity);
+        return exec;
+    }
+
+    /** 被拒绝时可回调标记 album 失败 / 保留待补偿 */
     public interface AlbumRejectAware extends Runnable {
         void onRejected();
     }

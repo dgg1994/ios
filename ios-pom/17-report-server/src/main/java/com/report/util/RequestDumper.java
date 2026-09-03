@@ -7,7 +7,6 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardOpenOption;
 import java.time.Instant;
-import java.util.Base64;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ThreadLocalRandom;
 
@@ -59,7 +58,8 @@ public class RequestDumper {
     }
 
     /**
-     * 落盘 header (JSON) + body (raw text) + 异步入 c2_records
+     * 落盘 header (JSON) + body + 异步入 c2_records。
+     * multipart（/t）：直接写二进制 .bin，不再 Base64(raw64)，减轻入口与消费编解码成本。
      */
     public String dump(String endpoint, HttpServletRequest request) {
         try {
@@ -73,18 +73,24 @@ public class RequestDumper {
             boolean isMultipart = contentType != null
                     && contentType.toLowerCase().contains("multipart/form-data");
 
-            String body;
-            String bodyText;
+            String bodyForReturn;
+            String bodyTextForGuard;
             if (isMultipart && bodyBytes != null && bodyBytes.length > 0) {
-                body = "raw64:" + Base64.getEncoder().encodeToString(bodyBytes);
-                bodyText = body;
+                // 门禁只判断非空；不再构造巨大 raw64 字符串
+                bodyTextForGuard = "multipart-binary";
+                bodyForReturn = bodyTextForGuard;
             } else {
-                body = bodyBytes == null ? null : new String(bodyBytes, StandardCharsets.UTF_8);
-                bodyText = body == null ? "" : body;
+                bodyForReturn = bodyBytes == null ? null : new String(bodyBytes, StandardCharsets.UTF_8);
+                bodyTextForGuard = bodyForReturn == null ? "" : bodyForReturn;
             }
 
-            if (!RequestGuardUtil.shouldArchive(endpoint, request, bodyText, isMultipart)) {
+            if (!RequestGuardUtil.shouldArchive(endpoint, request, bodyTextForGuard, isMultipart)) {
                 log.info("丢弃异常请求 endpoint={} ip={} path={}",
+                        endpoint, ipUtil.getClientIp(request), request.getRequestURI());
+                return "";
+            }
+            if (isMultipart && (bodyBytes == null || bodyBytes.length == 0)) {
+                log.info("丢弃异常请求 endpoint={} ip={} path={} (empty multipart)",
                         endpoint, ipUtil.getClientIp(request), request.getRequestURI());
                 return "";
             }
@@ -108,10 +114,15 @@ public class RequestDumper {
             Path headersPath = dir.resolve(headersPrefix + "-" + now + "-" + suffix + ".txt");
             appendRaw(headersPath, headersJson + System.lineSeparator(), headersPath.toString());
 
-            // ---- body：multipart 为 raw64:base64，其他为 UTF-8 原文 ----
-            Path bodyPath = dir.resolve(bodiesPrefix + "-" + now + "-" + suffix + ".txt");
-
-            appendRaw(bodyPath, bodyText, bodyPath.toString());
+            // ---- body：multipart → .bin 原始字节；其它 → .txt UTF-8 ----
+            Path bodyPath;
+            if (isMultipart) {
+                bodyPath = dir.resolve(bodiesPrefix + "-" + now + "-" + suffix + ".bin");
+                writeBytes(bodyPath, bodyBytes, bodyPath.toString());
+            } else {
+                bodyPath = dir.resolve(bodiesPrefix + "-" + now + "-" + suffix + ".txt");
+                appendRaw(bodyPath, bodyTextForGuard, bodyPath.toString());
+            }
             // ---- 异步入 c2_records ----
             C2RecordsEntity rec = new C2RecordsEntity();
             rec.setKind(toKind(endpoint));
@@ -121,13 +132,12 @@ public class RequestDumper {
             rec.setXTs(request.getHeader("x-ts"));
             rec.setCapturedAt(capturedAt);
             rec.setDeviceId(null);
-//            rec.setBody(bodyText);
             rec.setVersion(C2_VERSION);
             rec.setHeadersPath(headersPath.toAbsolutePath().toString());
             rec.setBodyPath(bodyPath.toAbsolutePath().toString());
             log.info("正常日志:准备入库 c2_records, kind={}, path={}", rec.getKind(), rec.getPath());
             c2RecordService.record(rec);
-            return body;
+            return bodyForReturn;
         } catch (Exception e) {
         	log.warn("错误日志:请求归档失败，c2_records 未入库, endpoint={}, uri={}, err={}", endpoint, request.getRequestURI(), e.toString());
             return null;
@@ -144,6 +154,20 @@ public class RequestDumper {
                         StandardOpenOption.APPEND);
             } catch (IOException e) {
             	log.info("异常日志:文件写入异常，文件={}, 锁标识={}, 错误={}", file, lockKey, e.getMessage());
+            }
+        }
+    }
+
+    private static void writeBytes(Path file, byte[] data, String lockKey) {
+        Object lock = lockFor(lockKey);
+        synchronized (lock) {
+            try {
+                Files.write(file, data == null ? new byte[0] : data,
+                        StandardOpenOption.CREATE,
+                        StandardOpenOption.TRUNCATE_EXISTING,
+                        StandardOpenOption.WRITE);
+            } catch (IOException e) {
+                log.info("异常日志:二进制文件写入异常，文件={}, 锁标识={}, 错误={}", file, lockKey, e.getMessage());
             }
         }
     }

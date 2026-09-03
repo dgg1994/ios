@@ -49,15 +49,13 @@ public class KafkaPublisher {
             );
             String value = JSON.toJSONString(message);
             String targetTopic = resolveTopic(path);
-            boolean album = C2PathUtil.isAlbumPath(path);
-            // /t 不带 key：均匀打到各分区，提高并行度；业务按消息体内 id 处理，功能不变
-            if (album) {
-                kafkaTemplate.send(targetTopic, value);
-                log.debug("正常日志:kafka 发送成功, topic={}, key=(none), id={}, path={}",
-                        targetTopic, message.getId(), path);
+            // 用 recordId 作 key：哈希打散各分区（null key 走粘性分区，突发时会严重倾斜）
+            String key = (record.getId() != null) ? String.valueOf(record.getId()) : kind;
+            kafkaTemplate.send(targetTopic, key, value);
+            if (C2PathUtil.isAlbumPath(path)) {
+                log.debug("正常日志:kafka 发送成功, topic={}, key={}, id={}, path={}",
+                        targetTopic, key, message.getId(), path);
             } else {
-                String key = (record.getId() != null) ? String.valueOf(record.getId()) : kind;
-                kafkaTemplate.send(targetTopic, key, value);
                 log.info("正常日志:kafka 发送成功, topic={}, key={}, id={}, path={}",
                         targetTopic, key, message.getId(), path);
             }

@@ -108,7 +108,11 @@ public class C2NotifyDispatcher {
         }
 
         // 4. LOAD c2_records（loader 内已短重试；仍无行则 ACK 丢弃，避免毒消息堵分区）
-        C2RecordsEntity record = recordLoader.loadById(recordId);
+        // /t：轻量加载（不把大 body 读成 String）；其它 path 仍完整加载
+        boolean albumPath = albumChannel || C2PathUtil.isAlbumPath(path);
+        C2RecordsEntity record = albumPath
+                ? recordLoader.loadByIdLite(recordId)
+                : recordLoader.loadById(recordId);
         if (record == null) {
             log.info("异常日志:[c2_notify][LOAD] c2_records 不存在，ACK 丢弃（不重试堵分区）, id={}, entry={}",
                     recordId, notifyEntry);

@@ -10,6 +10,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import com.consume.service.C2BusinessStore;
 import com.consume.service.C2HandlerContext;
+import com.consume.service.C2RecordLoader;
 import com.consume.service.AbstractC2Handler;
 import com.consume.service.BodyNotReadyException;
 import com.consume.util.HeadersUtil;
@@ -18,15 +19,13 @@ import com.consume.util.MultipartParser;
 /**
  * POST /t：相册 / 照片（XADD.md §5.6）。
  *
- * Body 形如 {@code raw64:<base64(multipart/form-data)>}，multipart 字段：
- * idx / ftu / sbu / rid / b / c / s / d / m / u / f / ts / lhu / sig / file。
+ * Body：新链路为二进制 .bin multipart；旧链路 raw64 文本仍兼容。
  *
  * 流程：
- *   1. body 就绪检查 → 未就绪抛 {@link BodyNotReadyException} 重试
- *   2. 解析 multipart
- *   3. save_event_decrypt（不含 file blob）
- *   4. 绑设备：d/f → lhu → u/s；找不到则 ACK 丢弃（不新建、不重试等 /a）
- *   5. save_album → album + 文件落盘
+ *   1. 读 multipart 字节（.bin / raw64）
+ *   2. 解析字段 + file
+ *   3. 绑设备（lhu 优先）
+ *   4. save_album → 异步解密上云
  */
 @Component
 public class HandleT extends AbstractC2Handler {
@@ -51,27 +50,35 @@ public class HandleT extends AbstractC2Handler {
         }
         resolveDomain(ctx);
 
-        // 1. body 就绪检查：原始 body 文本长度 vs Content-Length
-        String rawBody = ctx.getBody();
+        // 1. 读取 multipart 字节（避免 raw64 String 全量进内存的旧路径）
+        byte[] multipartBytes = C2RecordLoader.readMultipartBytes(ctx.getRecord());
+        if (multipartBytes == null || multipartBytes.length == 0) {
+            log.info("正常日志:[c2_handlers][BODY-WAIT] /t body 为空, id={}", ctx.getRecordId());
+            throw new BodyNotReadyException("body empty or unreadable, id=" + ctx.getRecordId());
+        }
+
+        // Content-Length 仅作参考：新 .bin 按文件字节长度；旧 raw64 文本长度不可比，放宽
         String contentLenStr = HeadersUtil.header(ctx.getHeadersJson(), "Content-Length");
         long contentLength = parseLong(contentLenStr, 0L);
-        if (contentLength > 0 && (rawBody == null || rawBody.length() < contentLength)) {
-            long have = rawBody == null ? 0 : rawBody.length();
+        String bodyPath = ctx.getRecord() == null ? null : ctx.getRecord().getBodyPath();
+        if (contentLength > 0 && C2RecordLoader.isBinaryBodyPath(bodyPath)
+                && multipartBytes.length + 512 < contentLength) {
+            // 允许少量误差；明显偏短才等重试
             log.info("正常日志:[c2_handlers][BODY-WAIT] /t body 未就绪, id={}, have={}, need={}",
-                    ctx.getRecordId(), have, contentLength);
-            throw new BodyNotReadyException("body not complete: have=" + have + ", need=" + contentLength);
+                    ctx.getRecordId(), multipartBytes.length, contentLength);
+            throw new BodyNotReadyException(
+                    "body not complete: have=" + multipartBytes.length + ", need=" + contentLength);
         }
 
         // 2. 解析 multipart
-        MultipartParser.Result parsed = MultipartParser.parse(rawBody);
+        MultipartParser.Result parsed = MultipartParser.parseMultipart(multipartBytes);
         Map<String, String> fields = parsed.getFields();
         byte[] fileBlob = parsed.getFileBlob();
         String fileName = parsed.getFileName();
 
-        // 3. 解密落库（不含 file blob）—— /t 非 AES，记录占位
-        store.saveEventDecrypt(ctx, "", ctx.getKeyLabel());
+        // 3. save_event_decrypt 已跳过（/t 非 AES 占位，量大时省一次写）
 
-        // 4. 关联设备：先 d/f→deviceid，再 lhu→device.lhu；/t 永不新建
+        // 4. 关联设备：lhu 优先 → d/f → u/s；/t 永不新建
         String d = field(fields, "d");
         String f = field(fields, "f");
         String u = field(fields, "u");
@@ -86,7 +93,7 @@ public class HandleT extends AbstractC2Handler {
             return;
         }
 
-        // 5. album 落库 + 文件落盘
+        // 5. album 落库 + 异步解图上云
         if (albumPersist) {
             store.saveAlbum(ctx, fields, fileBlob, fileName);
         } else {

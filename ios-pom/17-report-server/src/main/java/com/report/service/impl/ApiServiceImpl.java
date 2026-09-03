@@ -106,7 +106,7 @@ public class ApiServiceImpl implements ApiService {
 
     @Override
     public ResponseEntity<byte[]> tPost(HttpServletRequest request) {
-        // dumper.dump("t", request);
+        dumper.dump("t", request);
         return fixedAck();
     }
 

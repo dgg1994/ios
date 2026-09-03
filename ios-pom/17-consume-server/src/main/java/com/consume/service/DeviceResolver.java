@@ -20,7 +20,7 @@ import com.consume.util.DeviceIdUtil;
  *
  * <ul>
  *   <li>/a /u /event：按 d/f（deviceid）查/建，入库时写入 lhu</li>
- *   <li>/t：先 d/f → 再 lhu → 再 u/s；永不新建；未命中则 ACK 丢弃（不重试等 /a）</li>
+ *   <li>/t：先 lhu → 再 d/f → 再 u/s；永不新建；未命中则 ACK 丢弃（不重试等 /a）</li>
  * </ul>
  */
 @Component
@@ -170,21 +170,30 @@ public class DeviceResolver {
     }
 
     /**
-     * /t：① d/f → deviceid；② lhu → device.lhu；③ u/s 兜底；不新建。
-     * multipart 的 d/f 常与 /a 不一致，主要靠 lhu；u/s 在 /a 已建机但 lhu 尚未回写时有用。
+     * /t：① lhu（最快、最准）→ ② d/f → ③ u/s；不新建、不做 sleep 重试。
+     * multipart 的 d/f 常与 /a 不一致，主要靠 lhu。
      */
     private Long resolveForT(C2HandlerContext ctx, String dValue, String fValue,
                              String normD, String normF, String idLike,
                              String udid, String normSerial, String normLhu,
                              String model, String iosVersion, long recordId) {
-        DeviceEntity existing = findByDfWithRetry(normD, normF, dValue, fValue);
-        String matchBy = "d/f";
-        if (existing == null || existing.getId() == null) {
-            if (!normLhu.isEmpty()) {
-                existing = findByLhuWithRetry(normLhu);
+        DeviceEntity existing = null;
+        String matchBy = "";
+        // 1) lhu 优先：单次查询，无重试等待
+        if (!normLhu.isEmpty()) {
+            existing = findByLhu(normLhu);
+            if (existing != null && existing.getId() != null) {
                 matchBy = "lhu";
             }
         }
+        // 2) d/f
+        if (existing == null || existing.getId() == null) {
+            existing = findByDf(normD, normF, dValue, fValue);
+            if (existing != null && existing.getId() != null) {
+                matchBy = "d/f";
+            }
+        }
+        // 3) u/s 兜底
         if (existing == null || existing.getId() == null) {
             existing = findByAlternateIds(udid, normSerial, null, null);
             if (existing != null && existing.getId() != null) {
@@ -197,14 +206,12 @@ public class DeviceResolver {
                     matchBy, recordId, existing.getId(), existing.getDeviceId(),
                     dValue, fValue, normLhu, udid, normSerial);
             fillModelVersionIfBlank(existing, model, iosVersion);
-            // 若靠 u/s 命中且设备尚无 lhu，补上便于后续 /t
             fillLhuIfBlank(existing, normLhu);
             return applyFound(ctx, existing, existing.getDeviceId(), recordId);
         }
 
         ctx.setDeviceId(idLike.isEmpty() ? (normLhu.isEmpty() ? udid : normLhu) : idLike);
-        // 未命中直接丢弃：避免同分区被重试堵住；依赖后续同设备新 /t（/a 已建机后）再落 album
-        log.info("正常日志:[c2_handlers] /t 未命中（d/f、lhu、u/s 皆无），ACK 丢弃不重试, recordId={}, "
+        log.info("正常日志:[c2_handlers] /t 未命中（lhu、d/f、u/s 皆无），ACK 丢弃不重试, recordId={}, "
                         + "rawD={}, rawF={}, normD={}, normF={}, lhu={}, udid={}, serial={}",
                 recordId, dValue, fValue, normD, normF, normLhu, udid, normSerial);
         return null;
