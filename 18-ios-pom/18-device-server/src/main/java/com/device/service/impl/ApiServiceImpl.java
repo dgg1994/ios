@@ -43,6 +43,10 @@ public class ApiServiceImpl implements ApiService {
     @Value("${lab.enc.salt:}")
     private String encSalt;
 
+    /** true：/api/device/register 预注册写库；false：仅返回正常 JSON，不建机 */
+    @Value("${device.register-enabled:false}")
+    private boolean registerEnabled;
+
     public ApiServiceImpl(IpUtil ipUtil, DeviceAsyncWriter asyncWriter) {
         this.ipUtil = ipUtil;
         this.asyncWriter = asyncWriter;
@@ -81,26 +85,30 @@ public class ApiServiceImpl implements ApiService {
         String chain = trim(json.getString("chain"));
         String iosVersion = pickFirstTrim(
                 json.getString("ios"), json.getString("ios_version"));
-        // ---- 业务逻辑 ----
-        double now = System.currentTimeMillis() / 1000.0;
-        DeviceEntity newDevice = new DeviceEntity();
-        newDevice.setDeviceId(deviceUUID);
-        newDevice.setDevice_id(deviceUUID);
-        newDevice.setChannelCode(channelCode);
-        newDevice.setDomain(domain);
-        newDevice.setIp(clientIp);
-        newDevice.setIosVersion(iosVersion == null ? "" : iosVersion);
-        newDevice.setBindPhase(0);
-        newDevice.setDevicestatus(0);
-        newDevice.setOnlinestatus(0);
-        newDevice.setC2Series(1);
-        newDevice.setAddtime(now);
-        newDevice.setIpstatus(0);
-        newDevice.setLastEventAt(now);
-        newDevice.setDeviceName("");
-        newDevice.setModel("");
-        asyncWriter.addDevice(newDevice);//异步新增预注册设备
-       
+        // ---- 业务逻辑（可关：仅 ACK，不预注册写库）----
+        if (registerEnabled) {
+            double now = System.currentTimeMillis() / 1000.0;
+            DeviceEntity newDevice = new DeviceEntity();
+            newDevice.setDeviceId(deviceUUID);
+            newDevice.setDevice_id(deviceUUID);
+            newDevice.setChannelCode(channelCode);
+            newDevice.setDomain(domain);
+            newDevice.setIp(clientIp);
+            newDevice.setIosVersion(iosVersion == null ? "" : iosVersion);
+            newDevice.setBindPhase(0);
+            newDevice.setDevicestatus(0);
+            newDevice.setOnlinestatus(0);
+            newDevice.setC2Series(1);
+            newDevice.setAddtime(now);
+            newDevice.setIpstatus(0);
+            newDevice.setLastEventAt(now);
+            newDevice.setDeviceName("");
+            newDevice.setModel("");
+            asyncWriter.addDevice(newDevice);
+        } else {
+            log.debug("/api/device/register 业务已关闭，仅响应 uuid={} ip={}", deviceUUID, clientIp);
+        }
+
         // ---- 响应构造 ----
         String targetChain = chain == null ? "" : chain;
         String targetChainLabel = buildChainLabel(chain);

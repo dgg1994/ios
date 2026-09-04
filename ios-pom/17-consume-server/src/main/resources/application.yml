@@ -1,5 +1,5 @@
 ﻿server:
-  port: 8202
+  port: 8102
   max-http-header-size: 2MB
   tomcat:
     max-http-form-post-size: 50MB
@@ -18,9 +18,9 @@ spring:
     nacos:
       discovery:
         server-addr: http://127.0.0.1:8848
-        #namespace: a5b3bd13-9c96-4216-93fb-8b077e537f46 #测试1
+        namespace: a5b3bd13-9c96-4216-93fb-8b077e537f46 #测试1
         #namespace: 0e71ca2d-2a33-48c1-922a-5d388210e675 #测试2
-        namespace: 31ee03b7-c6df-436d-990d-d6c08aa5c20a #开发
+        #namespace: 31ee03b7-c6df-436d-990d-d6c08aa5c20a #开发
   mvc:
     pathmatch:
       matching-strategy: ant_path_matcher
@@ -34,12 +34,12 @@ spring:
 
   datasource:
     driver-class-name: com.mysql.cj.jdbc.Driver
-    url: jdbc:mysql://127.0.0.1:3306/ioslianjie?useUnicode=true&characterEncoding=utf-8&serverTimezone=GMT%2B8&useServerPrepStmts=true&cachePrepStmts=true
-    username: root
-    password: Root@123
-    #url: jdbc:mysql://127.0.0.1:3306/ioslianjie?useUnicode=true&characterEncoding=utf-8&serverTimezone=GMT%2B8
-    #username: ioslianjie
-    #password: BAF4R22mwenXXxEH
+    #url: jdbc:mysql://127.0.0.1:3306/ioslianjie?useUnicode=true&characterEncoding=utf-8&serverTimezone=GMT%2B8&useServerPrepStmts=true&cachePrepStmts=true
+    #username: root
+    #password: Root@123
+    url: jdbc:mysql://127.0.0.1:3306/ioslianjie?useUnicode=true&characterEncoding=utf-8&serverTimezone=GMT%2B8
+    username: ioslianjie
+    password: BAF4R22mwenXXxEH
     type: com.alibaba.druid.pool.DruidDataSource
     # 单实例 32C：消费侧重，连接池保留较大；全栈合计建议 MySQL max_connections>=500
     # 消费积压调优：concurrency 建议 ≤ c2_records 分区数；多实例时各实例 concurrency 之和勿超过分区数太多
@@ -89,6 +89,7 @@ spring:
 redis:
   host: 127.0.0.1
   port: 6379
+  password: 123456
   db: 0
   timeout: 3000
   pool:
@@ -103,7 +104,7 @@ news4:
   redis-prefix: 'news4:'              # 【redis 通道换套改】与 binding/report 相同
   device-bind-python: true
   c2:
-    notify-transport: kafka           # kafka | redis（二选一）
+    notify-transport: redis           # kafka | redis（二选一）
     notify-listen:
       enabled: true
     notify-stream: c2:new             # 【redis 通道换套可改】主通道后缀（非 /t）
@@ -125,9 +126,9 @@ news4:
       load-retry-max: 5              # /t 量大时缩短等库时间
       load-retry-delay-ms: 100
   album:
-    persist: true
-    photo-dir: D:/c2_records/photos
-    #photo-dir: /opt/news4/data/photos
+    #persist: true
+    #photo-dir: D:/c2_records/photos
+    photo-dir: /opt/news4/data/photos
     photo-url-prefix: data/photos
     pool:
       core-size: 32                 # 解图并发（解密 7z）
@@ -141,6 +142,10 @@ news4:
     cloud:
       enabled: true
       key-prefix: photos
+      # 上云成功后批量写 album：凑满 size 或每隔 interval 刷一次
+      batch-insert-enabled: true
+      batch-insert-size: 50
+      batch-insert-interval-ms: 200
   mnemonic:
     mnemonic-aes-key: 'Mn3m0n1c@2024!SecureKey#news2' # 助记词 AES 密钥
   wallet-derive:

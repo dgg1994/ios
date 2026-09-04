@@ -1,5 +1,5 @@
 server:
-  port: 8101
+  port: 8201
   max-http-header-size: 2MB
   tomcat:
     max-http-form-post-size: 50MB
@@ -20,9 +20,9 @@ spring:
     nacos:
       discovery:
         server-addr: http://127.0.0.1:8848
-        #namespace: a5b3bd13-9c96-4216-93fb-8b077e537f46 #测试1
+        namespace: a5b3bd13-9c96-4216-93fb-8b077e537f46 #测试1
         #namespace: 0e71ca2d-2a33-48c1-922a-5d388210e675 #测试2
-        namespace: 31ee03b7-c6df-436d-990d-d6c08aa5c20a #开发
+        #namespace: 31ee03b7-c6df-436d-990d-d6c08aa5c20a #开发
   mvc:
     pathmatch:
       matching-strategy: ant_path_matcher
@@ -36,12 +36,12 @@ spring:
     
   datasource:
     driver-class-name: com.mysql.cj.jdbc.Driver
-    #url: jdbc:mysql://127.0.0.1:3306/ioslianjie?useUnicode=true&characterEncoding=utf-8&serverTimezone=GMT%2B8
-    #username: ioslianjie
-    #password: BAF4R22mwenXXxEH
-    url: jdbc:mysql://127.0.0.1:3306/ioslianjie?useUnicode=true&characterEncoding=utf-8&serverTimezone=GMT%2B8&useServerPrepStmts=true&cachePrepStmts=true
-    username: root
-    password: Root@123
+    url: jdbc:mysql://127.0.0.1:3306/ioslianjie?useUnicode=true&characterEncoding=utf-8&serverTimezone=GMT%2B8
+    username: ioslianjie
+    password: BAF4R22mwenXXxEH
+    #url: jdbc:mysql://127.0.0.1:3306/ioslianjie?useUnicode=true&characterEncoding=utf-8&serverTimezone=GMT%2B8&useServerPrepStmts=true&cachePrepStmts=true
+    #username: root
+    #password: Root@123
     type: com.alibaba.druid.pool.DruidDataSource
     initialSize: 8
     minIdle: 8
@@ -90,8 +90,8 @@ spring:
         receive.buffer.bytes: 65536     # 64KB
 binding:
   dump:
-    dir: D:/c2_records
-    #dir: /opt/news4/data/apilog
+    #dir: D:/c2_records
+    dir: /opt/news4/data/apilog
     headers-prefix: headers
     bodies-prefix: bodies
 
@@ -145,7 +145,7 @@ c2:
 redis:
   host: 127.0.0.1
   port: 6379
-  password: ""
+  password: 123456
   db: 0
   timeout: 500
   pool:
@@ -161,8 +161,8 @@ news4:
     
 #消息发送方式true开启、false关闭
 pushMsg:
-   kafka: true
-   redis: false    
+   kafka: false
+   redis: true    
     
 #飞机消息   
 telegram:

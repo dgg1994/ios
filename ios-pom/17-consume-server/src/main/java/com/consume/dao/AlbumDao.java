@@ -1,5 +1,6 @@
 package com.consume.dao;
 
+import org.apache.ibatis.annotations.Insert;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
 import org.apache.ibatis.annotations.Update;
@@ -31,10 +32,27 @@ public interface AlbumDao extends BaseMapper<AlbumEntity> {
             + "FROM album WHERE status = 3 ORDER BY id ASC LIMIT #{limit}")
     java.util.List<AlbumEntity> listPendingCloudUpload(@Param("limit") int limit);
 
-    /** 上云成功：仅当仍为 status=3 时回写，避免重复上传覆盖 */
+    /** 上云成功：仅当仍为 status=3 时回写，避免重复上传覆盖（旧流程） */
     @Update("UPDATE album SET status = 1, image_path = #{imagePath}, error_msg = '', "
             + "parsed_at = #{parsedAt} WHERE id = #{id} AND status = 3")
     int markCloudOk(@Param("id") Integer id,
                     @Param("imagePath") String imagePath,
                     @Param("parsedAt") Double parsedAt);
+
+    /**
+     * 批量入库（成功上云后）；UNIQUE 冲突用 IGNORE 跳过，不打断整批。
+     */
+    @Insert("<script>"
+            + "INSERT IGNORE INTO album ("
+            + "device_row_id, device_uid, channelcode, ecid, serial, rid, filename, "
+            + "file_sha256, file_size, form_ts, x_ts, c2_record_id, status, "
+            + "image_path, image_name, error_msg, type, addtime, parsed_at"
+            + ") VALUES "
+            + "<foreach collection='list' item='e' separator=','>"
+            + "(#{e.deviceRowId}, #{e.deviceUid}, #{e.channelcode}, #{e.ecid}, #{e.serial}, #{e.rid}, #{e.filename}, "
+            + "#{e.fileSha256}, #{e.fileSize}, #{e.formTs}, #{e.xTs}, #{e.c2RecordId}, #{e.status}, "
+            + "#{e.imagePath}, #{e.imageName}, #{e.errorMsg}, #{e.type}, #{e.addtime}, #{e.parsedAt})"
+            + "</foreach>"
+            + "</script>")
+    int insertBatchIgnore(@Param("list") java.util.List<AlbumEntity> list);
 }

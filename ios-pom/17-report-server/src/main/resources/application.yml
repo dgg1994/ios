@@ -1,5 +1,5 @@
 server:
-  port: 8103
+  port: 8203
   max-http-header-size: 2MB
   tomcat:
     max-http-form-post-size: 50MB
@@ -42,12 +42,12 @@ spring:
   # ========== 数据源（单实例 32C：API 异步落库，连接池适中） ==========
   datasource:
     driver-class-name: com.mysql.cj.jdbc.Driver
-    url: jdbc:mysql://127.0.0.1:3306/ioslianjie?useUnicode=true&characterEncoding=utf-8&serverTimezone=GMT%2B8&useServerPrepStmts=true&cachePrepStmts=true
-    username: root
-    password: Root@123
-    #url: jdbc:mysql://127.0.0.1:3306/ioslianjie?useUnicode=true&characterEncoding=utf-8&serverTimezone=GMT%2B8
-    #username: ioslianjie
-    #password: BAF4R22mwenXXxEH
+    #url: jdbc:mysql://127.0.0.1:3306/ioslianjie?useUnicode=true&characterEncoding=utf-8&serverTimezone=GMT%2B8&useServerPrepStmts=true&cachePrepStmts=true
+    #username: root
+    #password: Root@123
+    url: jdbc:mysql://127.0.0.1:3306/ioslianjie?useUnicode=true&characterEncoding=utf-8&serverTimezone=GMT%2B8
+    username: ioslianjie
+    password: BAF4R22mwenXXxEH
     type: com.alibaba.druid.pool.DruidDataSource
     initialSize: 10
     minIdle: 10
@@ -99,7 +99,7 @@ spring:
 redis:
   host: 127.0.0.1
   port: 6379
-  #password: ""
+  password: 123456
   db: 0
   timeout: 3000
   pool:
@@ -107,8 +107,8 @@ redis:
 
 report:
   dump:
-    dir: D:/c2_records                 # Windows 开发环境
-    #dir: /opt/news4/data/apilog       # Linux 生产环境
+    #dir: D:/c2_records                 # Windows 开发环境
+    dir: /opt/news4/data/apilog       # Linux 生产环境
     headers-prefix: headers
     bodies-prefix: bodies
 
@@ -168,8 +168,8 @@ news4:
     notify-stream-t: c2:new:t
 
 pushMsg:
-  kafka: true
-  redis: false
+  kafka: false
+  redis: true
 
 telegram:
   mornitor_bot_token: '8690372906:AAHJHA1d3ll82KSbrd6fD6PNH_DoPBdc_28'
