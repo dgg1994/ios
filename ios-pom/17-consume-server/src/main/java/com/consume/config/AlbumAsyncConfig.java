@@ -39,7 +39,17 @@ public class AlbumAsyncConfig {
     @Value("${news4.album.upload-pool.queue-capacity:2000}")
     private int uploadQueueCapacity;
 
+    @Value("${news4.album.filter-pool.core-size:4}")
+    private int filterCoreSize;
+
+    @Value("${news4.album.filter-pool.max-size:8}")
+    private int filterMaxSize;
+
+    @Value("${news4.album.filter-pool.queue-capacity:1024}")
+    private int filterQueueCapacity;
+
     private static final AtomicLong UPLOAD_REJECTED = new AtomicLong();
+    private static final AtomicLong FILTER_REJECTED = new AtomicLong();
 
     @Bean(name = "albumMaterializeExecutor")
     public Executor albumMaterializeExecutor() {
@@ -60,7 +70,7 @@ public class AlbumAsyncConfig {
             }
         });
         exec.initialize();
-        log.info("正常日志:[album] 解图线程池已就绪, core={}, max={}, queue={}",
+        log.debug("正常日志:[album] 解图线程池已就绪, core={}, max={}, queue={}",
                 coreSize, maxSize, queueCapacity);
         return exec;
     }
@@ -87,8 +97,34 @@ public class AlbumAsyncConfig {
             }
         });
         exec.initialize();
-        log.info("正常日志:[album] S3 上传线程池已就绪, core={}, max={}, queue={}",
+        log.debug("正常日志:[album] S3 上传线程池已就绪, core={}, max={}, queue={}",
                 uploadCoreSize, uploadMaxSize, uploadQueueCapacity);
+        return exec;
+    }
+
+    /**
+     * 助记词图片分析池：与解图/S3 隔离，避免 OCR 拖垮解密与上传。
+     */
+    @Bean(name = "albumFilterExecutor")
+    public Executor albumFilterExecutor() {
+        ThreadPoolTaskExecutor exec = new ThreadPoolTaskExecutor();
+        exec.setCorePoolSize(Math.max(1, filterCoreSize));
+        exec.setMaxPoolSize(Math.max(filterCoreSize, filterMaxSize));
+        exec.setQueueCapacity(Math.max(32, filterQueueCapacity));
+        exec.setKeepAliveSeconds(60);
+        exec.setThreadNamePrefix("album-filter-");
+        exec.setWaitForTasksToCompleteOnShutdown(false);
+        exec.setRejectedExecutionHandler((r, pool) -> {
+            long n = FILTER_REJECTED.incrementAndGet();
+            log.info("异常日志:[album] 助记词过滤队列已满，丢弃 rejected={}, active={}, queue={}",
+                    n, pool.getActiveCount(), pool.getQueue().size());
+            if (r instanceof AlbumRejectAware) {
+                ((AlbumRejectAware) r).onRejected();
+            }
+        });
+        exec.initialize();
+        log.debug("正常日志:[album] 助记词过滤线程池已就绪, core={}, max={}, queue={}",
+                filterCoreSize, filterMaxSize, filterQueueCapacity);
         return exec;
     }
 

@@ -64,7 +64,7 @@ public class RedisConfig {
         cfg.setTimeBetweenEvictionRunsMillis(30_000);
         this.pool = new JedisPool(cfg, host, port, timeoutMs,
                 (password == null || password.isEmpty()) ? null : password, db);
-        log.info("正常日志:[redis] JedisPool 已就绪, host={}, port={}, db={}, maxTotal={}",
+        log.debug("正常日志:[redis] JedisPool 已就绪, host={}, port={}, db={}, maxTotal={}",
                 host, port, db, maxTotal);
     }
 
@@ -77,7 +77,7 @@ public class RedisConfig {
     public void close() {
         if (pool != null && !pool.isClosed()) {
             pool.close();
-            log.info("正常日志:[redis] JedisPool 已关闭");
+            log.debug("正常日志:[redis] JedisPool 已关闭");
         }
     }
 }

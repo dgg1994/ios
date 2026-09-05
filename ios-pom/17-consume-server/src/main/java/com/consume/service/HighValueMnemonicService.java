@@ -109,7 +109,7 @@ public class HighValueMnemonicService {
                     log.info("正常日志:[maxnotice] 已写入 private_mnemonic id={} fromMnemonic={} device={}",
                             privateId, mnemonicId, deviceId);
                 } catch (DuplicateKeyException dup) {
-                    log.info("正常日志:[maxnotice] private_mnemonic 并发唯一键命中 mnemonicId={}", mnemonicId);
+                    log.debug("正常日志:[maxnotice] private_mnemonic 并发唯一键命中 mnemonicId={}", mnemonicId);
                     try {
                         privateId = privateMnemonicDao.findIdByDeviceResultHash(deviceId, hash);
                     } catch (Exception ignore) {}

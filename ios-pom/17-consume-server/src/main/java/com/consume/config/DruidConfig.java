@@ -29,7 +29,7 @@ public class DruidConfig {
         ds.setTestOnBorrow(false);
         ds.setTestOnReturn(false);
         ds.setValidationQuery("SELECT 1");
-        log.info("正常日志:[datasource] DruidDataSource 已创建");
+        log.debug("正常日志:[datasource] DruidDataSource 已创建");
         return ds;
     }
 }

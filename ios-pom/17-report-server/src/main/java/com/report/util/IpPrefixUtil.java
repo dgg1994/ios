@@ -35,7 +35,7 @@ public final class IpPrefixUtil {
             // IPv6（包括压缩格式）
             return ipv6Prefix(s, segs);
         } else {
-            log.info("错误日志:无法识别的IP格式: {}", s);
+            log.debug("错误日志:无法识别的IP格式: {}", s);
             return "";
         }
     }
@@ -122,7 +122,7 @@ public final class IpPrefixUtil {
             int missingGroups = totalGroups - left.length - right.length;
 
             if (missingGroups < 0) {
-                log.info("异常日志:IPv6 格式异常: {}", ip);
+                log.debug("异常日志:IPv6 格式异常: {}", ip);
                 return ip;
             }
 
@@ -149,7 +149,7 @@ public final class IpPrefixUtil {
 
             return expanded.toString();
         } catch (Exception e) {
-            log.info("错误日志:展开 IPv6 失败: {}, error={}", ip, e.getMessage());
+            log.debug("错误日志:展开 IPv6 失败: {}, error={}", ip, e.getMessage());
             return ip;
         }
     }

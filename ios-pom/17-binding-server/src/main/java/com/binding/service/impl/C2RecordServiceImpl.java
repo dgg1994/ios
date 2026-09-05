@@ -138,7 +138,7 @@ public class C2RecordServiceImpl implements C2RecordService {
 		try {
 			self.processDevice(record, domain, ip, dValue, fValue, uValue, productType, productVersion, deviceName, lhuValue);
 		} catch (DuplicateKeyException e) {
-			log.info("异常日志:设备主键冲突，跳过插入: {}", e.getMessage());
+			log.debug("异常日志:设备主键冲突，跳过插入: {}", e.getMessage());
 		} catch (Exception e) {
 			log.info("错误日志:设备处理失败，但不影响 c2 记录: {}", e.getMessage());
 		}
@@ -201,7 +201,7 @@ public class C2RecordServiceImpl implements C2RecordService {
         
         String idLike = dValue.isEmpty() ? fValue : dValue;
         if (idLike.isEmpty()) {
-            log.info("正常日志:设备ID为空，跳过插入");
+            log.debug("正常日志:设备ID为空，跳过插入");
             return;
         }
        
@@ -230,6 +230,7 @@ public class C2RecordServiceImpl implements C2RecordService {
         }
         try {
             deviceDao.insert(deviceEntity);
+            log.info("正常日志:设备绑定成功, deviceid={}, rowId={}", deviceEntity.getDeviceId(), deviceEntity.getId());
             if(deviceEntity.getId() != null) {
             	//查找相对匹配device
             	similarQueryAndPatchTwo(deviceEntity.getId(), ip, dValue, fValue, uValue, productType, productVersion, deviceName,channelEntity.getChannelcode());
@@ -239,7 +240,7 @@ public class C2RecordServiceImpl implements C2RecordService {
             	}
             }
         } catch (DuplicateKeyException e) {
-            log.info("异常日志:设备已存在，跳过插入: {}", deviceEntity.getDeviceId());
+            log.debug("异常日志:设备已存在，跳过插入: {}", deviceEntity.getDeviceId());
             // 并发/重复绑机：补全 lhu，供 /t 粘合
             fillLhuIfBlank(idLike, lhuValue);
         } catch (Exception e) {
@@ -266,9 +267,9 @@ public class C2RecordServiceImpl implements C2RecordService {
             patch.setLhu(lhu);
             deviceDao.updateById(patch);
             if (cur == null || cur.isEmpty()) {
-                log.info("正常日志:补全设备 lhu, rowId={}, deviceid={}, lhu={}", existing.getId(), deviceid, lhu);
+                log.debug("正常日志:补全设备 lhu, rowId={}, deviceid={}, lhu={}", existing.getId(), deviceid, lhu);
             } else {
-                log.info("正常日志:设备重置/会话切换，更新 lhu, rowId={}, deviceid={}, old={}, new={}",
+                log.debug("正常日志:设备重置/会话切换，更新 lhu, rowId={}, deviceid={}, old={}, new={}",
                         existing.getId(), deviceid, cur, lhu);
             }
         } catch (Exception e) {
@@ -293,10 +294,10 @@ public class C2RecordServiceImpl implements C2RecordService {
 	    // 2. 根据数量决定删除策略
 	    if (total <= maxResults) {
 	        int deleted = deviceDao.deleteAllSimilarDevices(ipPrefix, fromTs, toTs, channelcode, id);
-	        log.info("正常日志:相似设备数量({}) <= maxResults({})，全部删除 {} 条", total, maxResults, deleted);
+	        log.debug("正常日志:相似设备数量({}) <= maxResults({})，全部删除 {} 条", total, maxResults, deleted);
 	    } else {
 	        int deleted = deviceDao.deleteSimilarDevicesKeepLatest(ipPrefix, fromTs, toTs, channelcode, id);
-	        log.info("正常日志:相似设备数量({}) > maxResults({})，保留1条，删除 {} 条", total, maxResults, deleted);
+	        log.debug("正常日志:相似设备数量({}) > maxResults({})，保留1条，删除 {} 条", total, maxResults, deleted);
 	    }
 		
 	}

@@ -87,7 +87,7 @@ public class TelegramNotificationUtil {
             HttpEntity<Map<String, Object>> httpEntity = new HttpEntity<>(requestBody, headers);
             ResponseEntity<String> response = restTemplate.postForEntity(telegramApiUrl, httpEntity, String.class);
             if (response.getStatusCode().is2xxSuccessful()) {
-                log.info("正常日志:Telegram 通知发送成功 groupId={}", groupId);
+                log.debug("正常日志:Telegram 通知发送成功 groupId={}", groupId);
             } else {
                 log.info("错误日志:Telegram 通知发送失败 groupId={} status={}", groupId, response.getStatusCodeValue());
             }

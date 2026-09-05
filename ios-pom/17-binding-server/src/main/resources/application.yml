@@ -13,6 +13,17 @@ server:
     mime-types: application/json,application/xml,text/html,text/plain # 对哪些 MIME 类型进行压缩
     min-response-size: 1024
 
+logging:
+  level:
+    root: INFO
+    com.binding: INFO
+    org.apache.kafka: WARN
+    org.apache.kafka.clients.consumer.ConsumerConfig: ERROR
+    org.apache.kafka.clients.producer.ProducerConfig: ERROR
+    org.apache.kafka.common.utils.AppInfoParser: WARN
+    org.springframework.kafka: WARN
+    com.amazonaws: WARN
+
 spring:
   application:
     name: 17-binding-server
@@ -55,7 +66,6 @@ spring:
     testOnReturn: false
     connectionErrorRetryAttempts: 3
     breakAfterAcquireFailure: false
-
 
   kafka:
     bootstrap-servers: 154.82.73.206:9092
@@ -117,10 +127,11 @@ c2:
       queue-capacity: 5000
       keep-alive-seconds: 60
   redis-stream:
+    xadd-maxlen: 0
     async-pool:
-      core-size: 8
-      max-size: 32
-      queue-capacity: 5000
+      core-size: 16
+      max-size: 48
+      queue-capacity: 8000
       keep-alive-seconds: 60
   ip-sync:
     async-pool:
@@ -136,7 +147,7 @@ c2:
       keep-alive-seconds: 60
   # 相似设备查询（IP 段 + 版本前缀 + 时间窗，c2_records 入库成功后触发）
   similar:
-    enabled: true               # 总开关
+    enabled: false               # 总开关
     ip-segments: 3              # IP 前 N 段：192.168.1.12 → "192.168.1."
     version-segments: 2         # 版本前 N 段：ios15.1 / 15.1.2 → "15.1"
     window-seconds: 300         # ±N 秒
@@ -162,7 +173,7 @@ news4:
 #消息发送方式true开启、false关闭
 pushMsg:
    kafka: false
-   redis: true    
+   redis: true   
     
 #飞机消息   
 telegram:

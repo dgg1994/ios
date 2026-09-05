@@ -48,7 +48,7 @@ public class HandleUb extends AbstractC2Handler {
             log.info("异常日志:[c2_handlers] /ub 解密失败或无明文, id={}", ctx.getRecordId());
         }
 
-        log.info("正常日志:[c2_handlers] call handle_ub 完成, id={}, path={}, decryptOk={}",
+        log.debug("正常日志:[c2_handlers] call handle_ub 完成, id={}, path={}, decryptOk={}",
                 ctx.getRecordId(), ctx.getPath(), ctx.isDecryptOk());
     }
 }

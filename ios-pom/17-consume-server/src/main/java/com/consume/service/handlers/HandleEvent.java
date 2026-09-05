@@ -57,7 +57,7 @@ public class HandleEvent extends AbstractC2Handler {
         }
         store.insertEventRecord(ctx, ctx.getPlaintext());
 
-        log.info("正常日志:[c2_handlers] call handle_event 完成, id={}, deviceRowId={}, channelcode={}",
+        log.debug("正常日志:[c2_handlers] call handle_event 完成, id={}, deviceRowId={}, channelcode={}",
                 ctx.getRecordId(), ctx.getDeviceRowId(), ctx.getChannelcode());
     }
 }

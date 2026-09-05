@@ -86,8 +86,8 @@ public class AlbumBatchInsertBuffer {
                 return;
             }
             try {
-                int n = albumDao.insertBatchIgnore(batch);
-                log.debug("正常日志:[album] 批量入库 size={}, affected≈{}", batch.size(), n);
+                albumDao.insertBatchIgnore(batch);
+                log.info("正常日志:[album] 批量入库 size={}", batch.size());
             } catch (Exception ex) {
                 log.info("异常日志:[album] 批量入库失败，降级单条, size={}, err={}",
                         batch.size(), ex.getMessage());

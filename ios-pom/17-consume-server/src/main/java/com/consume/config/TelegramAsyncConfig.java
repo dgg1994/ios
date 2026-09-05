@@ -39,7 +39,7 @@ public class TelegramAsyncConfig {
         exec.setThreadNamePrefix("telegram-msg-");
         exec.setRejectedExecutionHandler(new ThreadPoolExecutor.CallerRunsPolicy());
         exec.initialize();
-        log.info("正常日志:[telegram] 线程池已就绪, core={}, max={}, queue={}",
+        log.debug("正常日志:[telegram] 线程池已就绪, core={}, max={}, queue={}",
                 coreSize, maxSize, queueCapacity);
         return exec;
     }

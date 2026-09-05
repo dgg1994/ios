@@ -115,7 +115,7 @@ public class DeviceResolver {
             return null;
         }
 
-        log.info("正常日志:[c2_handlers] 准备新建设备, path={}, recordId={}, deviceid={}, lhu={}, domain={}",
+        log.debug("正常日志:[c2_handlers] 准备新建设备, path={}, recordId={}, deviceid={}, lhu={}, domain={}",
                 ctx.getPath(), recordId, idLike, normLhu, domain);
 
         DeviceEntity device = new DeviceEntity();
@@ -201,19 +201,16 @@ public class DeviceResolver {
             }
         }
         if (existing != null && existing.getId() != null) {
-            log.debug("正常日志:[c2_handlers] /t 命中已有设备, matchBy={}, recordId={}, rowId={}, deviceid={}, "
-                            + "rawD={}, rawF={}, lhu={}, udid={}, serial={}",
-                    matchBy, recordId, existing.getId(), existing.getDeviceId(),
-                    dValue, fValue, normLhu, udid, normSerial);
+            log.debug("正常日志:[c2] /t 命中设备 matchBy={}, recordId={}, rowId={}",
+                    matchBy, recordId, existing.getId());
             fillModelVersionIfBlank(existing, model, iosVersion);
             fillLhuIfBlank(existing, normLhu);
             return applyFound(ctx, existing, existing.getDeviceId(), recordId);
         }
 
         ctx.setDeviceId(idLike.isEmpty() ? (normLhu.isEmpty() ? udid : normLhu) : idLike);
-        log.info("正常日志:[c2_handlers] /t 未命中（lhu、d/f、u/s 皆无），ACK 丢弃不重试, recordId={}, "
-                        + "rawD={}, rawF={}, normD={}, normF={}, lhu={}, udid={}, serial={}",
-                recordId, dValue, fValue, normD, normF, normLhu, udid, normSerial);
+        log.info("异常日志:[c2] /t 未命中设备, recordId={}, normD={}, lhu={}",
+                recordId, normD, normLhu);
         return null;
     }
 
@@ -226,8 +223,8 @@ public class DeviceResolver {
         ctx.setDeviceId(deviceid);
         applyChannelcode(ctx, existing.getChannelCode());
         link(recordId, existing.getId().longValue());
-        log.info("正常日志:[c2_handlers] 设备已关联, recordId={}, path={}, rowId={}, deviceid={}, lhu={}, channelcode={}",
-                recordId, ctx.getPath(), existing.getId(), deviceid, existing.getLhu(), ctx.getChannelcode());
+        log.info("正常日志:[c2] 设备已关联, path={}, id={}, rowId={}, deviceid={}",
+                ctx.getPath(), recordId, existing.getId(), deviceid);
         return existing.getId().longValue();
     }
 
@@ -240,7 +237,7 @@ public class DeviceResolver {
             sleepBrief();
             hit = findByDf(normD, normF, rawD, rawF);
             if (hit != null) {
-                log.info("正常日志:[c2_handlers] d/f 重试命中, attempt={}, deviceid={}", i, hit.getDeviceId());
+                log.debug("正常日志:[c2_handlers] d/f 重试命中, attempt={}, deviceid={}", i, hit.getDeviceId());
                 return hit;
             }
         }
@@ -272,7 +269,7 @@ public class DeviceResolver {
             sleepBrief();
             hit = findByDfThenAlt(normD, normF, rawD, rawF, udid, serial);
             if (hit != null) {
-                log.info("正常日志:[c2_handlers] 设备重试命中, attempt={}, deviceid={}", i, hit.getDeviceId());
+                log.debug("正常日志:[c2_handlers] 设备重试命中, attempt={}, deviceid={}", i, hit.getDeviceId());
                 return hit;
             }
         }
@@ -297,7 +294,7 @@ public class DeviceResolver {
             sleepBrief();
             hit = findByLhu(lhu);
             if (hit != null) {
-                log.info("正常日志:[c2_handlers] lhu 重试命中, attempt={}, lhu={}, rowId={}",
+                log.debug("正常日志:[c2_handlers] lhu 重试命中, attempt={}, lhu={}, rowId={}",
                         i, lhu, hit.getId());
                 return hit;
             }
@@ -373,8 +370,7 @@ public class DeviceResolver {
                 existing.setIosVersion(iosVersion);
             }
             deviceDao.updateById(patch);
-            log.info("正常日志:[c2_handlers] 补全设备 model/ios_version, rowId={}, model={}, iosVersion={}",
-                    existing.getId(), existing.getModel(), existing.getIosVersion());
+            log.debug("正常日志:[c2] 补全设备 model/ios_version, rowId={}", existing.getId());
             invalidateDeviceCache(existing);
             putDeviceCacheKeys(existing);
         } catch (Exception e) {
@@ -402,9 +398,9 @@ public class DeviceResolver {
             deviceDao.updateById(patch);
             existing.setLhu(lhu);
             if (cur == null || cur.isEmpty()) {
-                log.info("正常日志:[c2_handlers] 补全设备 lhu, rowId={}, lhu={}", existing.getId(), lhu);
+                log.debug("正常日志:[c2] 补全设备 lhu, rowId={}, lhu={}", existing.getId(), lhu);
             } else {
-                log.info("正常日志:[c2_handlers] 设备重置/会话切换，更新 lhu, rowId={}, old={}, new={}",
+                log.debug("正常日志:[c2] 更新设备 lhu, rowId={}, old={}, new={}",
                         existing.getId(), cur, lhu);
             }
             invalidateDeviceCache(existing);

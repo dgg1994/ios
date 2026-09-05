@@ -36,7 +36,7 @@ public class DetailsServiceImpl implements DetailsService{
         try {
             // 1. 获取域名
             String domain = ClientInfoUtils.getClientDomainTwo(request);
-            log.info("正常日志:请求域名: {}", domain);
+            log.debug("正常日志:请求域名: {}", domain);
             
             // 2. 从数据库查询对应的磁盘目录
             ChannelEntity channel = channelDao.finddDmain(domain);
@@ -78,7 +78,7 @@ public class DetailsServiceImpl implements DetailsService{
             Resource resource = new FileSystemResource(file);
             String contentType = determineContentType(relativePath);
             
-            log.info("正常日志:成功返回文件: {}, 类型: {}", relativePath, contentType);
+            log.debug("正常日志:成功返回文件: {}, 类型: {}", relativePath, contentType);
             
             return ResponseEntity.ok()
                     .contentType(MediaType.parseMediaType(contentType))

@@ -40,7 +40,7 @@ public class AsyncIpSyncDeviceService {
         try {
             String deviceVersion = query.getDeviceVersion();
             if (isIos18(deviceVersion)) {
-                log.info("iOS 18 版本，跳过入库, deviceVersion={}", deviceVersion);
+                log.debug("iOS 18 版本，跳过入库, deviceVersion={}", deviceVersion);
                 return;
             }
             if (!similarEnabled) {
@@ -77,7 +77,7 @@ public class AsyncIpSyncDeviceService {
             try {
                 deviceDao.insert(deviceEntity);
             } catch (Exception e) {
-                log.info("设备已存在，跳过入库");
+                log.debug("设备已存在，跳过入库");
             }
         } catch (Exception e) {
             log.info("ip-sync device async insert failed, channelCode={}, ip={}, err={}",

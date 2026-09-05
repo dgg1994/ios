@@ -68,7 +68,7 @@ public class AddressListenNotifier {
                 query.setChain(ne.getKey());
                 query.setAddresses(ne.getValue());
                 MonitorUtil.walletPost(ADD_ADDRESS_PATH, query);
-                log.info("正常日志:[monitor] addaddress 已提交, mnemonicId={}, chain={}, count={}",
+                log.debug("正常日志:[monitor] addaddress 已提交, mnemonicId={}, chain={}, count={}",
                         mnemonicId, ne.getKey(), ne.getValue().size());
             } catch (Exception e) {
                 log.info("异常日志:[monitor] addaddress 失败, mnemonicId={}, chain={}, err={}",

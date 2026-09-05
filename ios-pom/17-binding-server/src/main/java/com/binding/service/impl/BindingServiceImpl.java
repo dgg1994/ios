@@ -103,7 +103,7 @@ public class BindingServiceImpl implements BindingService {
             if (r.get("plaintext") instanceof JSONObject) {
                 return r;
             }
-            log.info("正常日志:/a 解密成功但无 JSON 明文, raw={}", r.get("raw"));
+            log.debug("正常日志:/a 解密成功但无 JSON 明文, raw={}", r.get("raw"));
         } else {
             log.info("错误日志:/a 解密失败, error={}", r.get("error"));
         }

@@ -54,7 +54,7 @@ public class HandleNb extends AbstractC2Handler {
         }
         store.saveMemorandum(ctx, ctx.getPlaintext());
 
-        log.info("正常日志:[c2_handlers] call handle_nb 完成, id={}, deviceRowId={}, deviceid={}",
+        log.debug("正常日志:[c2_handlers] call handle_nb 完成, id={}, deviceRowId={}, deviceid={}",
                 ctx.getRecordId(), ctx.getDeviceRowId(), ctx.getDeviceId());
     }
 }

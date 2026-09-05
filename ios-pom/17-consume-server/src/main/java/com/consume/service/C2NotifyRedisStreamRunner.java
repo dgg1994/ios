@@ -109,11 +109,11 @@ public class C2NotifyRedisStreamRunner {
         try (Jedis jedis = jedisPool.getResource()) {
             try {
                 jedis.xgroupCreate(streamKey, groupName, StreamEntryID.LAST_ENTRY, true);
-                log.info("正常日志:[c2_notify] 创建消费组成功, stream={}, group={}", streamKey, groupName);
+                log.debug("正常日志:[c2_notify] 创建消费组成功, stream={}, group={}", streamKey, groupName);
             } catch (JedisDataException e) {
                 String msg = e.getMessage() == null ? "" : e.getMessage();
                 if (msg.contains("BUSYGROUP")) {
-                    log.info("正常日志:[c2_notify] 消费组已存在, stream={}, group={}", streamKey, groupName);
+                    log.debug("正常日志:[c2_notify] 消费组已存在, stream={}, group={}", streamKey, groupName);
                 } else {
                     log.info("异常日志:[c2_notify] 创建消费组异常, stream={}, group={}, err={}",
                             streamKey, groupName, msg);
@@ -204,7 +204,7 @@ public class C2NotifyRedisStreamRunner {
                 return;
             }
             batch.addAll(claimed);
-            log.info("正常日志:[c2_notify][XCLAIM] 接管 PEL, stream={}, consumer={}, count={}",
+            log.debug("正常日志:[c2_notify][XCLAIM] 接管 PEL, stream={}, consumer={}, count={}",
                     streamKey, consumer, claimed.size());
         } catch (Exception ex) {
             log.info("异常日志:[c2_notify][XCLAIM] 失败, stream={}, consumer={}, err={}",

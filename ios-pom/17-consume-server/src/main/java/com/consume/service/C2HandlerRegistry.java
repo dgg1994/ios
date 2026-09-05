@@ -33,11 +33,11 @@ public class C2HandlerRegistry {
                     continue;
                 }
                 map.put(p, h);
-                log.info("正常日志:[c2_handlers] 注册 handler, path={}, class={}", p, h.getClass().getSimpleName());
+                log.debug("正常日志:[c2] 注册 handler path={}", p);
             }
         }
         this.pathHandlers = Collections.unmodifiableMap(map);
-        log.info("正常日志:[c2_handlers] PATH_HANDLERS 已就绪, paths={}", map.keySet());
+        log.info("正常日志:[c2] handlers 就绪 paths={}", map.keySet());
     }
 
     /** 是否存在该 path 的 handler */

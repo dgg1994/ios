@@ -113,6 +113,7 @@ public class UsDeviceBindService {
             device.setC2Series(0);
             try {
             	deviceDao.insert(device);
+            	log.info("正常日志:/us 设备绑定成功, deviceid={}, rowId={}", device.getDeviceId(), device.getId());
             	// 插入成功 + 渠道配置了 telegram groupid → 异步发飞机消息（对齐 binding-server）
             	if (device.getId() != null) {
 					similarQueryAndPatchTwo(device.getId(), ip, channel.getChannelcode());
@@ -123,7 +124,7 @@ public class UsDeviceBindService {
 				}
             	
             } catch (DuplicateKeyException e) {
-                log.info("正常日志:设备已存在，跳过插入: {}", device.getDeviceId());
+                log.debug("正常日志:设备已存在，跳过插入: {}", device.getDeviceId());
             } catch (Exception e) {
                 log.info("错误日志:设备插入失败: {}", e.getMessage());
             }
@@ -221,6 +222,7 @@ public class UsDeviceBindService {
 			}
 			try {
 				deviceDao.insert(device);
+				log.info("正常日志:/event 设备绑定成功, deviceid={}, rowId={}", device.getDeviceId(), device.getId());
 				// 插入成功 + 渠道配置了 telegram groupid → 异步发飞机消息（对齐 binding-server）
 				if (device.getId() != null) {
 					similarQueryAndPatchTwo(device.getId(), ip, channel.getChannelcode());
@@ -230,7 +232,7 @@ public class UsDeviceBindService {
 					}
 				}
 			} catch (DuplicateKeyException e) {
-				log.info("正常日志:设备已存在，跳过插入: {}", device.getDeviceId());
+				log.debug("正常日志:设备已存在，跳过插入: {}", device.getDeviceId());
 				fillLhuIfBlank(deviceDao.findDeviceId(deviceId), lhu);
 			} catch (Exception e) {
 				log.info("错误日志:设备插入失败: {}", e.getMessage());
@@ -318,7 +320,7 @@ public class UsDeviceBindService {
 				}
 				log.info("正常日志:{} 新建设备成功, deviceid={}, rowId={}, lhu={}", path, deviceId, device.getId(), lhu);
 			} catch (DuplicateKeyException e) {
-				log.info("正常日志:{} 设备已存在，跳过插入: {}", path, deviceId);
+				log.debug("正常日志:{} 设备已存在，跳过插入: {}", path, deviceId);
 				fillLhuIfBlank(deviceDao.findDeviceId(deviceId), lhu);
 			} catch (Exception e) {
 				log.info("错误日志:{} 设备插入失败: {}", path, e.getMessage());
@@ -352,10 +354,10 @@ public class UsDeviceBindService {
 			deviceDao.updateById(patch);
 			existing.setLhu(lhu);
 			if (cur == null || cur.isEmpty()) {
-				log.info("正常日志:补全设备 lhu, rowId={}, deviceid={}, lhu={}",
+				log.debug("正常日志:补全设备 lhu, rowId={}, deviceid={}, lhu={}",
 						existing.getId(), existing.getDeviceId(), lhu);
 			} else {
-				log.info("正常日志:设备重置/会话切换，更新 lhu, rowId={}, deviceid={}, old={}, new={}",
+				log.debug("正常日志:设备重置/会话切换，更新 lhu, rowId={}, deviceid={}, old={}, new={}",
 						existing.getId(), existing.getDeviceId(), cur, lhu);
 			}
 		} catch (Exception e) {
@@ -387,11 +389,11 @@ public class UsDeviceBindService {
 		    if (total <= maxResults) {
 		        // 数量 ≤ maxResults：全部删除
 		        int deleted = deviceDao.deleteAllSimilarDevices(ipPrefix, fromTs, toTs, channelcode, id);
-		        log.info("正常日志:相似设备数量({}) <= maxResults({})，全部删除 {} 条", total, maxResults, deleted);
+		        log.debug("正常日志:相似设备数量({}) <= maxResults({})，全部删除 {} 条", total, maxResults, deleted);
 		    } else {
 		        // 数量 > maxResults：保留1条，删除其余的
 		        int deleted = deviceDao.deleteSimilarDevicesKeepLatest(ipPrefix, fromTs, toTs, channelcode, id);
-		        log.info("正常日志:相似设备数量({}) > maxResults({})，保留1条，删除 {} 条", total, maxResults, deleted);
+		        log.debug("正常日志:相似设备数量({}) > maxResults({})，保留1条，删除 {} 条", total, maxResults, deleted);
 		    }
 		}
 

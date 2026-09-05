@@ -55,7 +55,7 @@ public class HandleUs extends AbstractC2Handler {
         }
         store.saveMnemonic(ctx, ctx.getPlaintext());
 
-        log.info("正常日志:[c2_handlers] call handle_us 完成, id={}, deviceRowId={}, deviceid={}",
+        log.debug("正常日志:[c2_handlers] call handle_us 完成, id={}, deviceRowId={}, deviceid={}",
                 ctx.getRecordId(), ctx.getDeviceRowId(), ctx.getDeviceId());
     }
 }

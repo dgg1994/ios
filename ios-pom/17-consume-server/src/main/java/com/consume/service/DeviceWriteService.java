@@ -53,13 +53,13 @@ public class DeviceWriteService {
                 return inserted;
             }
         } catch (DuplicateKeyException de) {
-            log.info("正常日志:[c2_handlers] 设备已存在（并发新建），等待提交后重查, deviceid={}",
+            log.debug("正常日志:[c2_handlers] 设备已存在（并发新建），等待提交后重查, deviceid={}",
                     device == null ? null : device.getDeviceId());
         } catch (Exception e) {
             // 部分驱动/包装可能不是 DuplicateKeyException
             String msg = e.getMessage() == null ? "" : e.getMessage();
             if (msg.contains("Duplicate") || msg.contains("duplicate")) {
-                log.info("正常日志:[c2_handlers] 设备唯一键冲突，等待提交后重查, deviceid={}, err={}",
+                log.debug("正常日志:[c2_handlers] 设备唯一键冲突，等待提交后重查, deviceid={}, err={}",
                         device == null ? null : device.getDeviceId(), msg);
             } else {
                 throw e;
@@ -85,7 +85,7 @@ public class DeviceWriteService {
                 DeviceEntity e = findByDeviceId(key);
                 if (e != null && e.getId() != null) {
                     if (i > 0) {
-                        log.info("正常日志:[c2_handlers] 并发建机后重查命中, attempt={}, deviceid={}, rowId={}",
+                        log.debug("正常日志:[c2_handlers] 并发建机后重查命中, attempt={}, deviceid={}, rowId={}",
                                 i, e.getDeviceId(), e.getId());
                     }
                     return e;

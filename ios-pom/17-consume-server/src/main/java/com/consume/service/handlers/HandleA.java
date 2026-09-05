@@ -65,7 +65,7 @@ public class HandleA extends AbstractC2Handler {
 
         store.saveEventDecrypt(ctx, plain, ctx.getKeyLabel());
 
-        log.info("正常日志:[c2_handlers] call handle_a 完成, id={}, deviceRowId={}, deviceid={}, lhu={}, model={}, iosVersion={}",
+        log.debug("正常日志:[c2_handlers] call handle_a 完成, id={}, deviceRowId={}, deviceid={}, lhu={}, model={}, iosVersion={}",
                 ctx.getRecordId(), ctx.getDeviceRowId(), ctx.getDeviceId(), lhu, m, pv);
     }
 }

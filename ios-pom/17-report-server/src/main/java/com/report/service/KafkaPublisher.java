@@ -52,13 +52,8 @@ public class KafkaPublisher {
             // 用 recordId 作 key：哈希打散各分区（null key 走粘性分区，突发时会严重倾斜）
             String key = (record.getId() != null) ? String.valueOf(record.getId()) : kind;
             kafkaTemplate.send(targetTopic, key, value);
-            if (C2PathUtil.isAlbumPath(path)) {
-                log.debug("正常日志:kafka 发送成功, topic={}, key={}, id={}, path={}",
-                        targetTopic, key, message.getId(), path);
-            } else {
-                log.info("正常日志:kafka 发送成功, topic={}, key={}, id={}, path={}",
-                        targetTopic, key, message.getId(), path);
-            }
+            log.debug("正常日志:kafka 发送成功, topic={}, key={}, id={}, path={}",
+                    targetTopic, key, message.getId(), path);
         } catch (Exception e) {
             log.info("错误日志:kafka 发送失败, kind={}, path={}, err={}",
                     record.getKind(), record.getPath(), e.getMessage());

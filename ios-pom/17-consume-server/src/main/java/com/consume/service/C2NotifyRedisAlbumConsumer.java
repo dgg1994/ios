@@ -12,6 +12,7 @@ import redis.clients.jedis.JedisPool;
 
 /**
  * C2 相册 Redis Stream 消费者：{@code news4:c2:new:t}，仅处理 /t。
+ * 关闭：{@code c2.channel.album-enabled=false}。
  */
 @Component
 @ConditionalOnProperty(name = "news4.c2.notify-transport", havingValue = "redis")
@@ -25,6 +26,9 @@ public class C2NotifyRedisAlbumConsumer {
 
     @Value("${news4.c2.notify-listen.enabled:true}")
     private boolean enabled;
+
+    @Value("${c2.channel.album-enabled:true}")
+    private boolean channelEnabled;
 
     @Value("${news4.redis-prefix:news4:}")
     private String redisPrefix;
@@ -54,7 +58,7 @@ public class C2NotifyRedisAlbumConsumer {
 
     @PostConstruct
     public void start() {
-        if (!enabled) {
+        if (!enabled || !channelEnabled) {
             return;
         }
         runner = new C2NotifyRedisStreamRunner(

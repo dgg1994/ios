@@ -42,7 +42,7 @@ public class TelegramNotificationUtil {
             // 发送 POST 请求
             ResponseEntity<String> response = restTemplate.postForEntity(telegramApiUrl, httpEntity, String.class);
             if (response.getStatusCode().is2xxSuccessful()) {
-                log.info("正常日志:Telegram 通知发送成功");
+                log.debug("正常日志:Telegram 通知发送成功");
             } else {
                 log.info("错误日志:Telegram 通知发送失败，响应码：{}", response.getStatusCodeValue());
             }

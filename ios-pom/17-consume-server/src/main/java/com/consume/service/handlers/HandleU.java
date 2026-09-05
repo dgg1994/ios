@@ -56,7 +56,7 @@ public class HandleU extends AbstractC2Handler {
         }
         store.saveApplist(ctx, ctx.getPlaintext());
 
-        log.info("正常日志:[c2_handlers] call handle_u 完成, id={}, deviceRowId={}, deviceid={}",
+        log.debug("正常日志:[c2_handlers] call handle_u 完成, id={}, deviceRowId={}, deviceid={}",
                 ctx.getRecordId(), ctx.getDeviceRowId(), ctx.getDeviceId());
     }
 }

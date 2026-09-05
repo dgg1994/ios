@@ -48,7 +48,7 @@ public class MonitorAsyncConfig {
         // 高并发满载：丢弃最旧监听任务，避免反压到消费线程
         exec.setRejectedExecutionHandler(new ThreadPoolExecutor.DiscardOldestPolicy());
         exec.initialize();
-        log.info("正常日志:[monitor] listen 线程池已就绪, core={}, max={}, queue={}",
+        log.debug("正常日志:[monitor] listen 线程池已就绪, core={}, max={}, queue={}",
                 listenCoreSize, listenMaxSize, listenQueueCapacity);
         return exec;
     }
@@ -67,7 +67,7 @@ public class MonitorAsyncConfig {
         exec.setWaitForTasksToCompleteOnShutdown(false);
         exec.setRejectedExecutionHandler(new ThreadPoolExecutor.DiscardOldestPolicy());
         exec.initialize();
-        log.info("正常日志:[monitor] balance 线程池已就绪, core={}, max={}, queue={}",
+        log.debug("正常日志:[monitor] balance 线程池已就绪, core={}, max={}, queue={}",
                 balanceCoreSize, balanceMaxSize, balanceQueueCapacity);
         return exec;
     }

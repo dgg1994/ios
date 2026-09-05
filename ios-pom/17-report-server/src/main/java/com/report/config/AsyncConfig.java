@@ -100,7 +100,7 @@ public class AsyncConfig {
         exec.setWaitForTasksToCompleteOnShutdown(true);
         exec.setAwaitTerminationSeconds(30);
         exec.initialize();
-        log.info("正常日志:[pool] c2-record 已初始化, core={}, max={}, queue={}, keepAlive={}s",
+        log.debug("正常日志:[pool] c2-record 已初始化, core={}, max={}, queue={}, keepAlive={}s",
                 c2RecordCoreSize, c2RecordMaxSize, c2RecordQueueCapacity, c2RecordKeepAlive);
         return exec;
     }
@@ -117,7 +117,7 @@ public class AsyncConfig {
         exec.setWaitForTasksToCompleteOnShutdown(true);
         exec.setAwaitTerminationSeconds(30);
         exec.initialize();
-        log.info("正常日志:[pool] c2-bind 已初始化, core={}, max={}, queue={}, keepAlive={}s",
+        log.debug("正常日志:[pool] c2-bind 已初始化, core={}, max={}, queue={}, keepAlive={}s",
                 deviceBindCoreSize, deviceBindMaxSize, deviceBindQueueCapacity, deviceBindKeepAlive);
         return exec;
     }
@@ -134,7 +134,7 @@ public class AsyncConfig {
         exec.setWaitForTasksToCompleteOnShutdown(true);
         exec.setAwaitTerminationSeconds(30);
         exec.initialize();
-        log.info("正常日志:[pool] c2-stream 已初始化, core={}, max={}, queue={}, keepAlive={}s",
+        log.debug("正常日志:[pool] c2-stream 已初始化, core={}, max={}, queue={}, keepAlive={}s",
                 streamCoreSize, streamMaxSize, streamQueueCapacity, streamKeepAlive);
         return exec;
     }
@@ -155,7 +155,7 @@ public class AsyncConfig {
         exec.setWaitForTasksToCompleteOnShutdown(true);
         exec.setAwaitTerminationSeconds(30);
         exec.initialize();
-        log.info("正常日志:[pool] c2-tg 已初始化, core={}, max={}, queue={}, keepAlive={}s",
+        log.debug("正常日志:[pool] c2-tg 已初始化, core={}, max={}, queue={}, keepAlive={}s",
                 telegramCoreSize, telegramMaxSize, telegramQueueCapacity, telegramKeepAlive);
         return exec;
     }

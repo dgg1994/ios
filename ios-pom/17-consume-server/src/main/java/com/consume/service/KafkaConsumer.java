@@ -12,7 +12,8 @@ import lombok.extern.slf4j.Slf4j;
 
 /**
  * C2 主通道 Kafka 消费者：{@code c2.kafka.topic}（默认 c2_records），不含 /t。
- * /t 走 {@link KafkaAlbumConsumer}；主 topic 中遗留 /t 消息会 ACK 跳过。
+ * /t 只走 {@link KafkaAlbumConsumer}；主 topic 若出现 /t 则 ACK 跳过。
+ * 关闭：{@code c2.channel.main-enabled=false}（相册机专用部署，不入主消费组）。
  */
 @Component
 @Slf4j
@@ -25,7 +26,8 @@ public class KafkaConsumer {
     @KafkaListener(
             topics = "${c2.kafka.topic:c2_records}",
             groupId = "${spring.kafka.consumer.group-id:consumer-group}",
-            containerFactory = "mainKafkaListenerContainerFactory")
+            containerFactory = "mainKafkaListenerContainerFactory",
+            autoStartup = "${c2.channel.main-enabled:true}")
     public void consume(String message) {
         dispatch(message, false);
     }
