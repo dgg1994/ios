@@ -3,6 +3,7 @@ package com.report.service.impl;
 import javax.servlet.http.HttpServletRequest;
 
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -44,7 +45,11 @@ public class ApiServiceImpl implements ApiService {
 
     @Autowired
     private IpUtil ipUtil;
-    
+
+    /** true：/t 只返回 ACK，不 dump（不落盘、不入 Kafka/Redis） */
+    @Value("${c2.t.skip:false}")
+    private boolean tSkip;
+
     @Override
     public ResponseEntity<String> eventGet(HttpServletRequest request) {
         return plainText(OK_TEXT);
@@ -106,7 +111,9 @@ public class ApiServiceImpl implements ApiService {
 
     @Override
     public ResponseEntity<byte[]> tPost(HttpServletRequest request) {
-        dumper.dump("t", request);
+        if (!tSkip) {
+            dumper.dump("t", request);
+        }
         return fixedAck();
     }
 
