@@ -1,0 +1,58 @@
+server:
+  port: 8210
+  tomcat:
+    threads:
+      max: 64
+      min-spare: 4
+    max-connections: 200
+    accept-count: 100
+  servlet:
+    multipart:
+      max-file-size: 30MB
+      max-request-size: 30MB
+
+spring:
+  application:
+    name: orc-server
+  cloud:
+    nacos:
+      discovery:
+        server-addr: http://127.0.0.1:8848
+        #namespace: a5b3bd13-9c96-4216-93fb-8b077e537f46 #测试1
+        #namespace: 0e71ca2d-2a33-48c1-922a-5d388210e675 #测试2
+        namespace: 31ee03b7-c6df-436d-990d-d6c08aa5c20a #开发
+  mvc:
+    pathmatch:
+      matching-strategy: ant_path_matcher
+
+logging:
+  level:
+    root: INFO
+    com.orc: INFO
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+
+# =============================================================================
+# OCR（对齐 17-consume mnemonic-filter；并发请按机器核数配置）
+# =============================================================================
+ocr:
+  enabled: true
+  Windows: 'C:/Program Files/Tesseract-OCR/tessdata' #Linux 常见路径见下
+  #tessdata-path: ''
+  # tessdata-path: 'C:/Program Files/Tesseract-OCR/tessdata'
+  # tessdata-path: '/usr/share/tesseract-ocr/4.00/tessdata'
+  language: eng
+  min-width: 60
+  min-height: 60
+  min-bytes: 800
+  max-bytes: 20000000
+  min-window-hits: 10
+  min-total-hits: 10
+  require-checksum: false
+  max-long-side: 1600          # 长边超过则缩图；0=不缩
+  max-concurrent: 4            # 同时 OCR 路数；8 核机器可试 4~8
+  acquire-timeout-ms: 30000    # 抢不到槽位则返回 ocr_busy
