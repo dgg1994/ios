@@ -551,7 +551,8 @@ public class C2BusinessStore {
 
             scheduleMaterialize(draft, fileBlob);
         } catch (Exception ex) {
-            log.info("异常日志:[c2_handlers][album] 提交失败, recordId={}, err={}",
+            // 高峰允许丢图：不向上抛，避免异步重试占满线程、拖死消费
+            log.info("异常日志:[c2_handlers][album] 提交失败(丢弃), recordId={}, err={}",
                     ctx.getRecordId(), ex.getMessage());
         }
     }
@@ -565,28 +566,15 @@ public class C2BusinessStore {
 
             @Override
             public void onRejected() {
-                log.info("异常日志:[c2_handlers][album] 解图队列已满，丢弃不落库, recordId={}, sha={}",
-                        draft.getC2RecordId(), draft.getFileSha256());
+                // 与线程池策略一致：队列满则丢图，仅抽样打日志由 AlbumAsyncConfig 负责
             }
         };
-        Runnable submit = () -> {
-            try {
-                albumMaterializeExecutor.execute(task);
-            } catch (Exception ex) {
-                log.info("异常日志:[c2_handlers][album] 提交解图失败, recordId={}, err={}",
-                        draft.getC2RecordId(), ex.getMessage());
-            }
-        };
-        if (TransactionSynchronizationManager.isSynchronizationActive()) {
-            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-                @Override
-                public void afterCommit() {
-                    submit.run();
-                }
-            });
-            return;
+        try {
+            albumMaterializeExecutor.execute(task);
+        } catch (RuntimeException ex) {
+            log.info("异常日志:[c2_handlers][album] 提交解图失败(丢弃), recordId={}, err={}",
+                    draft.getC2RecordId(), ex.getMessage());
         }
-        submit.run();
     }
 
     /** 解密 .dat → 投递 S3；成功后再 INSERT album。 */

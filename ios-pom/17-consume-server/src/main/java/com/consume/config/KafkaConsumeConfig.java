@@ -8,7 +8,6 @@ import org.apache.kafka.clients.consumer.Consumer;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.common.TopicPartition;
-import org.apache.kafka.common.errors.TimeoutException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -127,7 +126,10 @@ public class KafkaConsumeConfig {
         factory.setConsumerFactory(consumerFactory);
         factory.setCommonErrorHandler(errorHandler);
         factory.setConcurrency(Math.max(1, concurrency));
-        log.debug("正常日志:[c2_notify][kafka] {} ListenerContainerFactory 已就绪, concurrency={}", tag, concurrency);
+        // 同步提交：避免异步 commit 失败被静默拖过，LAG 看起来永远不动
+        factory.getContainerProperties().setSyncCommits(true);
+        log.info("正常日志:[c2_notify][kafka] {} ListenerContainerFactory 已就绪, concurrency={}, syncCommits=true",
+                tag, concurrency);
         return factory;
     }
 
@@ -156,8 +158,12 @@ public class KafkaConsumeConfig {
             @Override
             public void handleOtherException(Exception thrownException, Consumer<?, ?> consumer,
                     MessageListenerContainer container, boolean batchListener) {
-                if (isBenignCommitIssue(thrownException)) {
-                    log.info("异常日志:[c2_notify][kafka] offset 提交异常(可恢复)，将继续/重入组, err={}",
+                // CommitFailed：分区已在 rebalance 中易主。DefaultErrorHandler 没有 record 上下文，
+                // 调用 super 会再抛 IllegalStateException 刷屏；这里只记录并返回，下一轮 poll 会重入组。
+                // 根因必须靠减小 max.poll.records / 增大 max.poll.interval.ms，否则会反复 CommitFailed、LAG 不降。
+                if (isCommitFailed(thrownException)) {
+                    log.info("异常日志:[c2_notify][kafka] CommitFailed → CURRENT-OFFSET 将停住、日志仍可能继续；"
+                                    + "多为 rebalance/本机过载。降 concurrency 并保证 describe 有稳定 CONSUMER-ID。 err={}",
                             thrownException.getMessage());
                     return;
                 }
@@ -170,18 +176,9 @@ public class KafkaConsumeConfig {
         return handler;
     }
 
-    /** CommitFailed / 提交 Timeout：无单条 record，DefaultErrorHandler 会再抛 IllegalStateException 刷屏 */
-    private static boolean isBenignCommitIssue(Throwable t) {
+    private static boolean isCommitFailed(Throwable t) {
         while (t != null) {
             if (t instanceof CommitFailedException) {
-                return true;
-            }
-            if (t instanceof TimeoutException) {
-                String msg = t.getMessage();
-                if (msg != null && msg.toLowerCase().contains("commit")) {
-                    return true;
-                }
-                // 无 record 上下文的 Timeout 也多为协调/提交侧，避免二次抛 IllegalState
                 return true;
             }
             t = t.getCause();

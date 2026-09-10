@@ -12,7 +12,7 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 
 /**
  * /t 相册解图专用线程池：与 Kafka/Redis 消费线程隔离。
- * 队列满时拒绝并计数打日志（不 CallerRuns，避免反压消费线程）。
+ * 解图队列满时丢弃图片（高峰允许丢图），不抛异常、不 CallerRuns，避免堵死消费。
  */
 @Configuration
 public class AlbumAsyncConfig {
@@ -48,8 +48,19 @@ public class AlbumAsyncConfig {
     @Value("${news4.album.filter-pool.queue-capacity:1024}")
     private int filterQueueCapacity;
 
+    /** Kafka /t：listener 只投递，业务在此池执行，避免 poll 超时 CommitFailed */
+    @Value("${news4.album.kafka-dispatch-pool.core-size:32}")
+    private int dispatchCoreSize;
+
+    @Value("${news4.album.kafka-dispatch-pool.max-size:64}")
+    private int dispatchMaxSize;
+
+    @Value("${news4.album.kafka-dispatch-pool.queue-capacity:8000}")
+    private int dispatchQueueCapacity;
+
     private static final AtomicLong UPLOAD_REJECTED = new AtomicLong();
     private static final AtomicLong FILTER_REJECTED = new AtomicLong();
+    private static final AtomicLong DISPATCH_REJECTED = new AtomicLong();
 
     @Bean(name = "albumMaterializeExecutor")
     public Executor albumMaterializeExecutor() {
@@ -62,9 +73,12 @@ public class AlbumAsyncConfig {
         exec.setThreadNamePrefix("album-mat-");
         exec.setWaitForTasksToCompleteOnShutdown(false);
         exec.setRejectedExecutionHandler((r, pool) -> {
+            // 高峰允许丢图：不抛异常、不回压重试，保证 Kafka/业务线程不被堵死，队列内任务慢慢消化
             long n = REJECTED.incrementAndGet();
-            log.info("异常日志:[album] 解图队列已满，丢弃任务 rejected={}, active={}, queue={}",
-                    n, pool.getActiveCount(), pool.getQueue().size());
+            if (n == 1L || n % 100L == 0L) {
+                log.info("异常日志:[album] 解图队列已满，丢弃图片(允许高峰丢图) rejected={}, active={}, queue={}",
+                        n, pool.getActiveCount(), pool.getQueue().size());
+            }
             if (r instanceof AlbumRejectAware) {
                 ((AlbumRejectAware) r).onRejected();
             }
@@ -103,7 +117,7 @@ public class AlbumAsyncConfig {
     }
 
     /**
-     * 助记词图片分析池：与解图/S3 隔离，避免 OCR 拖垮解密与上传。
+     * 助记词过滤池：调 ocr-server HTTP，与解图/S3 隔离。
      */
     @Bean(name = "albumFilterExecutor")
     public Executor albumFilterExecutor() {
@@ -125,6 +139,31 @@ public class AlbumAsyncConfig {
         exec.initialize();
         log.debug("正常日志:[album] 助记词过滤线程池已就绪, core={}, max={}, queue={}",
                 filterCoreSize, filterMaxSize, filterQueueCapacity);
+        return exec;
+    }
+
+    /**
+     * /t Kafka 热路径卸载：读盘/解析/绑设备在此执行，listener 一律 ACK。
+     * 队列满时抛 RejectedExecutionException，由调用方 ACK 并丢弃业务（不回压 Kafka）。
+     */
+    @Bean(name = "albumKafkaDispatchExecutor")
+    public Executor albumKafkaDispatchExecutor() {
+        ThreadPoolTaskExecutor exec = new ThreadPoolTaskExecutor();
+        exec.setCorePoolSize(Math.max(4, dispatchCoreSize));
+        exec.setMaxPoolSize(Math.max(dispatchCoreSize, dispatchMaxSize));
+        exec.setQueueCapacity(Math.max(256, dispatchQueueCapacity));
+        exec.setKeepAliveSeconds(60);
+        exec.setThreadNamePrefix("album-kafka-");
+        exec.setWaitForTasksToCompleteOnShutdown(false);
+        exec.setRejectedExecutionHandler((r, pool) -> {
+            long n = DISPATCH_REJECTED.incrementAndGet();
+            log.info("异常日志:[album] Kafka 卸载队列已满，回压重试 rejected={}, active={}, queue={}",
+                    n, pool.getActiveCount(), pool.getQueue().size());
+            throw new java.util.concurrent.RejectedExecutionException("album-kafka-dispatch-full");
+        });
+        exec.initialize();
+        log.info("正常日志:[album] Kafka 卸载线程池已就绪, core={}, max={}, queue={}",
+                dispatchCoreSize, dispatchMaxSize, dispatchQueueCapacity);
         return exec;
     }
 

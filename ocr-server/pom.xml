@@ -6,7 +6,7 @@
   <groupId>com.orc</groupId>
   <artifactId>orc-server</artifactId>
   <version>0.0.1-SNAPSHOT</version>
-  <name>orc-server</name>
+  <name>ocr-server</name>
   <description>独立 OCR 服务：图片识别 + BIP39 助记词判定</description>
 
   <properties>
