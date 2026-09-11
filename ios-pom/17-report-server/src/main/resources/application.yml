@@ -118,8 +118,8 @@ redis:
 
 report:
   dump:
-    #dir: D:/c2_records                 # Windows 开发环境
-    dir: /opt/news4/data/apilog       # Linux 生产环境
+    dir: D:/c2_records                 # Windows 开发环境
+    #dir: /opt/news4/data/apilog       # Linux 生产环境
     headers-prefix: headers
     bodies-prefix: bodies
 

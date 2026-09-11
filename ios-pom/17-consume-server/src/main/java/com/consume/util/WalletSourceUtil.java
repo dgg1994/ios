@@ -26,8 +26,10 @@ public final class WalletSourceUtil {
         m.put("g", "tonkeeper");
         m.put("l", "Ronin");
         m.put("a1", "metamask");
+        m.put("a", "metamask");
         m.put("s", "solflare");
         m.put("f", "bitkeep");
+        m.put("b", "imtoken");
         m.put("j", "mytonwallet");
         m.put("p", "tokenpocket");
         m.put("e", "base");

