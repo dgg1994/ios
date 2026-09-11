@@ -32,7 +32,8 @@ import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
 
 /**
- * 各链原生币 / USDT 余额查询（公共 RPC，多节点回退 + 并发限流）。
+ * 各链原生币 / USDT 余额查询。
+ * <p>优先 NOWNodes（new-nodes）三方，失败再降级公共/官方节点；多节点回退 + 并发限流。
  * <p>支持：tron / eth / bsc / btc / sol。
  */
 @Slf4j
@@ -45,7 +46,7 @@ public class WalletBalanceQuery {
     /** Solana USDT (SPL) mint */
     public static final String USDT_SOL = "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB";
 
-    /** 逗号分隔，按顺序尝试（勿用需 API Key 的 rpc.ankr.com） */
+    /** 逗号分隔，按顺序尝试（勿用需 API Key 的 rpc.ankr.com）——作为 NOWNodes 之后的降级节点 */
     @Value("${monitor.balance.eth-rpc:https://ethereum.publicnode.com,https://1rpc.io/eth,https://cloudflare-eth.com,https://eth.llamarpc.com}")
     private String ethRpc;
     @Value("${monitor.balance.bsc-rpc:https://bsc-dataseed.binance.org,https://bsc-dataseed1.binance.org,https://bsc.publicnode.com,https://bsc-dataseed2.binance.org}")
@@ -63,12 +64,31 @@ public class WalletBalanceQuery {
     @Value("${monitor.balance.max-concurrent:6}")
     private int maxConcurrent;
 
+    /** NOWNodes：优先；api-key 为空则跳过三方，只用降级节点 */
+    @Value("${monitor.balance.nownodes.enabled:true}")
+    private boolean nowNodesEnabled;
+    @Value("${monitor.balance.nownodes.api-key:}")
+    private String nowNodesApiKey;
+    @Value("${monitor.balance.nownodes.eth:https://eth.nownodes.io}")
+    private String nowNodesEth;
+    @Value("${monitor.balance.nownodes.bsc:https://bsc.nownodes.io}")
+    private String nowNodesBsc;
+    @Value("${monitor.balance.nownodes.sol:https://sol.nownodes.io}")
+    private String nowNodesSol;
+    /** Blockbook：GET /api/v2/address/{addr} */
+    @Value("${monitor.balance.nownodes.btc:https://btcbook.nownodes.io}")
+    private String nowNodesBtc;
+    /** Tron Blockbook：GET /api/v2/address/{addr}?details=tokenBalances */
+    @Value("${monitor.balance.nownodes.tron:https://trx-blockbook.nownodes.io}")
+    private String nowNodesTron;
+
     private ExecutorService pool;
     private Semaphore slots;
     private List<String> ethRpcs;
     private List<String> bscRpcs;
     private List<String> btcApis;
     private List<String> solRpcs;
+    private List<String> tronApis;
 
     @PostConstruct
     public void init() {
@@ -83,12 +103,54 @@ public class WalletBalanceQuery {
                 },
                 new ThreadPoolExecutor.CallerRunsPolicy());
         this.slots = new Semaphore(Math.max(1, maxConcurrent));
-        this.ethRpcs = splitUrls(ethRpc);
-        this.bscRpcs = splitUrls(bscRpc);
-        this.btcApis = splitUrls(btcApi);
-        this.solRpcs = splitUrls(solRpc);
-        log.info("【balance】RPC 已加载 eth={} bsc={} btc={} sol={}",
-                ethRpcs.size(), bscRpcs.size(), btcApis.size(), solRpcs.size());
+        boolean nn = useNowNodes();
+        this.ethRpcs = mergePrimary(nn ? nowNodesEth : null, splitUrls(ethRpc));
+        this.bscRpcs = mergePrimary(nn ? nowNodesBsc : null, splitUrls(bscRpc));
+        this.btcApis = mergePrimary(nn ? nowNodesBtc : null, splitUrls(btcApi));
+        this.solRpcs = mergePrimary(nn ? nowNodesSol : null, splitUrls(solRpc));
+        this.tronApis = mergePrimary(nn ? nowNodesTron : null, splitUrls(tronApi));
+        if (nowNodesEnabled && !nn) {
+            log.warn("【balance】NOWNODES 已启用但 api-key 为空，跳过三方，仅用官方/公共节点");
+        }
+        log.info("【balance】节点已加载 nownodes={} eth={} bsc={} btc={} sol={} tron={}",
+                nn, ethRpcs.size(), bscRpcs.size(), btcApis.size(), solRpcs.size(), tronApis.size());
+    }
+
+    private boolean useNowNodes() {
+        return nowNodesEnabled && nowNodesApiKey != null && !nowNodesApiKey.trim().isEmpty();
+    }
+
+    /** 三方 URL 置前，再跟降级列表（去重） */
+    private static List<String> mergePrimary(String primary, List<String> fallback) {
+        List<String> out = new ArrayList<>();
+        if (primary != null) {
+            String p = primary.trim().replaceAll("/$", "");
+            if (!p.isEmpty()) {
+                out.add(p);
+            }
+        }
+        if (fallback != null) {
+            for (String u : fallback) {
+                if (u == null || u.isEmpty()) {
+                    continue;
+                }
+                String n = u.replaceAll("/$", "");
+                if (!out.contains(n)) {
+                    out.add(n);
+                }
+            }
+        }
+        return out;
+    }
+
+    private boolean isNowNodesUrl(String url) {
+        return url != null && url.toLowerCase(Locale.ROOT).contains("nownodes.io");
+    }
+
+    private void applyAuth(HttpRequest req, String url) {
+        if (isNowNodesUrl(url) && useNowNodes()) {
+            req.header("api-key", nowNodesApiKey.trim());
+        }
     }
 
     @PreDestroy
@@ -209,37 +271,92 @@ public class WalletBalanceQuery {
         bal.setNativeSymbol("trx");
         bal.setNativeBal("0");
         bal.setUsdtBal("0");
-        try {
-            String url = tronApi.replaceAll("/$", "") + "/v1/accounts/" + address;
-            String body = httpGet(url);
-            JSONObject root = parseJsonObject(body);
-            JSONArray data = root == null ? null : root.getJSONArray("data");
-            if (data != null && !data.isEmpty()) {
-                JSONObject acc = data.getJSONObject(0);
-                long sun = acc.getLongValue("balance");
-                bal.setNativeBal(formatUnits(BigInteger.valueOf(sun), 6));
-                JSONArray trc20 = acc.getJSONArray("trc20");
-                if (trc20 != null) {
-                    for (int i = 0; i < trc20.size(); i++) {
-                        JSONObject token = trc20.getJSONObject(i);
-                        if (token == null) continue;
-                        if (token.containsKey(USDT_TRON)) {
-                            bal.setUsdtBal(formatUnits(new BigInteger(token.getString(USDT_TRON)), 6));
-                            break;
-                        }
-                        for (String k : token.keySet()) {
-                            if (USDT_TRON.equalsIgnoreCase(k)) {
-                                bal.setUsdtBal(formatUnits(new BigInteger(token.getString(k)), 6));
-                                break;
-                            }
-                        }
-                    }
+        List<String> apis = tronApis == null || tronApis.isEmpty()
+                ? Collections.singletonList("https://api.trongrid.io") : tronApis;
+        Exception last = null;
+        for (String api : apis) {
+            try {
+                String base = api.replaceAll("/$", "");
+                if (isBlockbook(base)) {
+                    fillFromBlockbookTron(bal, base, address);
+                } else {
+                    fillFromTronGrid(bal, base, address);
                 }
+                return bal;
+            } catch (Exception e) {
+                last = e;
+                log.warn("【balance】tron FAIL api={} err={}，尝试下一节点", api, shortErr(e));
             }
-        } catch (Exception e) {
-            log.warn("【balance】tron FAIL addr={} err={}", address, shortErr(e));
+        }
+        if (last != null) {
+            log.warn("【balance】tron 全部节点失败 addr={} err={}", address, shortErr(last));
         }
         return bal;
+    }
+
+    private void fillFromTronGrid(ChainBalance bal, String base, String address) {
+        String url = base + "/v1/accounts/" + address;
+        String body = httpGet(url);
+        JSONObject root = parseJsonObject(body);
+        JSONArray data = root == null ? null : root.getJSONArray("data");
+        if (data == null || data.isEmpty()) {
+            return;
+        }
+        JSONObject acc = data.getJSONObject(0);
+        long sun = acc.getLongValue("balance");
+        bal.setNativeBal(formatUnits(BigInteger.valueOf(sun), 6));
+        JSONArray trc20 = acc.getJSONArray("trc20");
+        if (trc20 == null) {
+            return;
+        }
+        for (int i = 0; i < trc20.size(); i++) {
+            JSONObject token = trc20.getJSONObject(i);
+            if (token == null) {
+                continue;
+            }
+            if (token.containsKey(USDT_TRON)) {
+                bal.setUsdtBal(formatUnits(new BigInteger(token.getString(USDT_TRON)), 6));
+                return;
+            }
+            for (String k : token.keySet()) {
+                if (USDT_TRON.equalsIgnoreCase(k)) {
+                    bal.setUsdtBal(formatUnits(new BigInteger(token.getString(k)), 6));
+                    return;
+                }
+            }
+        }
+    }
+
+    private void fillFromBlockbookTron(ChainBalance bal, String base, String address) {
+        String url = base + "/api/v2/address/" + address + "?details=tokenBalances";
+        String body = httpGet(url);
+        JSONObject root = parseJsonObject(body);
+        if (root == null) {
+            throw new IllegalStateException("empty blockbook tron resp");
+        }
+        String balance = root.getString("balance");
+        if (balance != null && !balance.isEmpty()) {
+            bal.setNativeBal(formatUnits(new BigInteger(balance), 6));
+        }
+        JSONArray tokens = root.getJSONArray("tokens");
+        if (tokens == null) {
+            return;
+        }
+        for (int i = 0; i < tokens.size(); i++) {
+            JSONObject t = tokens.getJSONObject(i);
+            if (t == null) {
+                continue;
+            }
+            String contract = firstNonEmpty(t.getString("contract"), t.getString("token"));
+            if (!USDT_TRON.equalsIgnoreCase(contract)) {
+                continue;
+            }
+            String amt = firstNonEmpty(t.getString("balance"), t.getString("value"));
+            if (amt != null && !amt.isEmpty()) {
+                bal.setUsdtBal(formatUnits(new BigInteger(amt), 6));
+            }
+            return;
+        }
     }
 
     private ChainBalance queryBtc(String address) {
@@ -254,15 +371,29 @@ public class WalletBalanceQuery {
         Exception last = null;
         for (String api : apis) {
             try {
-                String url = api.replaceAll("/$", "") + "/address/" + address;
-                String body = httpGet(url);
-                JSONObject root = parseJsonObject(body);
-                if (root != null) {
-                    JSONObject chain = root.getJSONObject("chain_stats");
-                    if (chain != null) {
-                        long funded = chain.getLongValue("funded_txo_sum");
-                        long spent = chain.getLongValue("spent_txo_sum");
-                        bal.setNativeBal(formatUnits(BigInteger.valueOf(Math.max(0, funded - spent)), 8));
+                String base = api.replaceAll("/$", "");
+                if (isBlockbook(base)) {
+                    String url = base + "/api/v2/address/" + address;
+                    String body = httpGet(url);
+                    JSONObject root = parseJsonObject(body);
+                    if (root == null) {
+                        throw new IllegalStateException("empty blockbook btc resp");
+                    }
+                    String balance = root.getString("balance");
+                    if (balance != null && !balance.isEmpty()) {
+                        bal.setNativeBal(formatUnits(new BigInteger(balance), 8));
+                    }
+                } else {
+                    String url = base + "/address/" + address;
+                    String body = httpGet(url);
+                    JSONObject root = parseJsonObject(body);
+                    if (root != null) {
+                        JSONObject chain = root.getJSONObject("chain_stats");
+                        if (chain != null) {
+                            long funded = chain.getLongValue("funded_txo_sum");
+                            long spent = chain.getLongValue("spent_txo_sum");
+                            bal.setNativeBal(formatUnits(BigInteger.valueOf(Math.max(0, funded - spent)), 8));
+                        }
                     }
                 }
                 return bal;
@@ -275,6 +406,21 @@ public class WalletBalanceQuery {
             log.warn("【balance】btc 全部节点失败 addr={} err={}", address, shortErr(last));
         }
         return bal;
+    }
+
+    private static boolean isBlockbook(String base) {
+        if (base == null) {
+            return false;
+        }
+        String u = base.toLowerCase(Locale.ROOT);
+        return u.contains("blockbook") || u.contains("btcbook") || u.contains("trx-blockbook");
+    }
+
+    private static String firstNonEmpty(String a, String b) {
+        if (a != null && !a.isEmpty()) {
+            return a;
+        }
+        return b;
     }
 
     private ChainBalance querySol(String address) {
@@ -379,13 +525,14 @@ public class WalletBalanceQuery {
         req.put("method", method);
         req.put("params", params);
         int t = Math.max(timeout, 3000);
-        String body = HttpRequest.post(rpc)
+        HttpRequest http = HttpRequest.post(rpc)
                 .timeout(t)
                 .setConnectionTimeout(Math.min(5000, t))
                 .header("Content-Type", "application/json")
                 .body(req.toJSONString())
-                .charset(StandardCharsets.UTF_8)
-                .execute().body();
+                .charset(StandardCharsets.UTF_8);
+        applyAuth(http, rpc);
+        String body = http.execute().body();
         JSONObject resp = parseJsonObject(body);
         if (resp == null) throw new IllegalStateException("empty/non-json sol rpc resp");
         if (resp.get("error") != null) {
@@ -400,13 +547,14 @@ public class WalletBalanceQuery {
         req.put("id", 1);
         req.put("method", method);
         req.put("params", params);
-        String body = HttpRequest.post(rpc)
+        HttpRequest http = HttpRequest.post(rpc)
                 .timeout(timeoutMs)
                 .setConnectionTimeout(Math.min(5000, timeoutMs))
                 .header("Content-Type", "application/json")
                 .body(req.toJSONString())
-                .charset(StandardCharsets.UTF_8)
-                .execute().body();
+                .charset(StandardCharsets.UTF_8);
+        applyAuth(http, rpc);
+        String body = http.execute().body();
         JSONObject resp = parseJsonObject(body);
         if (resp == null) throw new IllegalStateException("empty/non-json rpc resp");
         if (resp.get("error") != null) {
@@ -417,10 +565,11 @@ public class WalletBalanceQuery {
     }
 
     private String httpGet(String url) {
-        return HttpRequest.get(url)
+        HttpRequest http = HttpRequest.get(url)
                 .timeout(timeoutMs)
-                .setConnectionTimeout(Math.min(5000, timeoutMs))
-                .execute().body();
+                .setConnectionTimeout(Math.min(5000, timeoutMs));
+        applyAuth(http, url);
+        return http.execute().body();
     }
 
     /** 拒绝 HTML 错误页，避免 fastjson 抛大段 DOCTYPE */
@@ -497,7 +646,10 @@ public class WalletBalanceQuery {
         BigDecimal d = new BigDecimal(raw).movePointLeft(decimals);
         d = d.setScale(8, RoundingMode.DOWN).stripTrailingZeros();
         String s = d.toPlainString();
-        return s.isEmpty() || "0E-8".equalsIgnoreCase(s) ? "0" : s;
+        if (s == null || s.isEmpty() || "0E-8".equalsIgnoreCase(s) || s.startsWith("0E")) {
+            return "0";
+        }
+        return s;
     }
 
     @Data

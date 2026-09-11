@@ -221,6 +221,16 @@ monitor:
   api_key: ak_acc6f0ce66e526602e91b818
   sign_key: c4177a108651daf4af590337fcad15227dc47895b5896ce8d6a2ad6c44ad1d88
   balance:
+    # NOWNodes（new-nodes）优先；api-key 必填才会走三方，失败自动降级下方官方/公共节点
+    nownodes:
+      enabled: true
+      api-key: "17d3c9a1-2922-422c-b245-40472e4cb30e"   # TODO: 填入 NOWNodes Dashboard 的 API Key
+      eth: https://eth.nownodes.io
+      bsc: https://bsc.nownodes.io
+      sol: https://sol.nownodes.io
+      btc: https://btcbook.nownodes.io
+      tron: https://trx-blockbook.nownodes.io
+    # 降级节点（三方失败后按顺序尝试）
     eth-rpc: https://ethereum.publicnode.com,https://1rpc.io/eth,https://cloudflare-eth.com,https://eth.llamarpc.com
     bsc-rpc: https://bsc-dataseed.binance.org,https://bsc-dataseed1.binance.org,https://bsc.publicnode.com,https://bsc-dataseed2.binance.org
     tron-api: https://api.trongrid.io
