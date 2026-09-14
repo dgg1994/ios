@@ -79,6 +79,10 @@ public class WaitboundConsumer implements ApplicationRunner {
 
     @Override
     public void run(ApplicationArguments args) {
+        if (!props.isMainChannelEnabled()) {
+            log.info("WaitboundConsumer skipped (consumer.channel.main-enabled=false)");
+            return;
+        }
         if (!props.isWaitboundTaskEnabled()) {
             log.info("WaitboundConsumer disabled (waitbound-task-enabled=false)");
             return;

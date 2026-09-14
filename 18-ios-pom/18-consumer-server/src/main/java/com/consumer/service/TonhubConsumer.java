@@ -79,6 +79,10 @@ public class TonhubConsumer implements ApplicationRunner {
 
     @Override
     public void run(ApplicationArguments args) {
+        if (!props.isMainChannelEnabled()) {
+            log.info("TonhubConsumer skipped (consumer.channel.main-enabled=false)");
+            return;
+        }
         if (!props.isTonhubTaskEnabled()) {
             log.info("TonhubConsumer disabled (tonhub-task-enabled=false)");
             return;

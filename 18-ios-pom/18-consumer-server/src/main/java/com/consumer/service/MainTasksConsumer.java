@@ -84,6 +84,10 @@ public class MainTasksConsumer implements ApplicationRunner {
 
     @Override
     public void run(ApplicationArguments args) {
+        if (!props.isMainChannelEnabled()) {
+            log.info("MainTasksConsumer skipped (consumer.channel.main-enabled=false)");
+            return;
+        }
         ensureStreamAndGroup(redisPush.streamMain(), redisPush.groupMain());
         running.set(true);
         int t = Math.max(1, props.getMainThreads());

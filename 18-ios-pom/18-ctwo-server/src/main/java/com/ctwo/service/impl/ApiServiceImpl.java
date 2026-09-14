@@ -68,6 +68,10 @@ public class ApiServiceImpl implements ApiService {
     @Value("${lab.enc.salt:}")
     private String encSalt;
 
+    /** false=/p 弃用：仍 ACK，但不落盘、不入 photo 队列 */
+    @Value("${api18.photo-enabled:true}")
+    private boolean photoEnabled;
+
     @Autowired
     private CtwoAsyncWriter ctwoAsyncWriter;
 
@@ -186,6 +190,10 @@ public class ApiServiceImpl implements ApiService {
 
     @Override
     public ResponseEntity<String> postP(HttpServletRequest request) {
+        if (!photoEnabled) {
+            log.info("postP skipped: api18.photo-enabled=false");
+            return ackText("ok");
+        }
         handlePhotoUpload(request);
         return ackText("ok");
     }

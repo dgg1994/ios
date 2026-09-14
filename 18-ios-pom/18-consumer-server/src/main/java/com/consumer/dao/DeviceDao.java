@@ -13,10 +13,10 @@ import java.util.List;
 @Repository
 public interface DeviceDao extends BaseMapper<DeviceEntity> {
 
-    @Select("SELECT * FROM device WHERE device_id = #{deviceId} ORDER BY id DESC LIMIT 1")
+    @Select("SELECT * FROM device WHERE device_id = #{deviceId} OR deviceid = #{deviceId} ORDER BY id DESC LIMIT 1")
     DeviceEntity findByDeviceIdLatest(@Param("deviceId") String deviceId);
 
-    @Select("SELECT * FROM device WHERE deviceid = #{deviceid} ORDER BY id DESC LIMIT 1")
+    @Select("SELECT * FROM device WHERE deviceid = #{deviceid} OR device_id = #{deviceid} ORDER BY id DESC LIMIT 1")
     DeviceEntity findByDeviceid(@Param("deviceid") String deviceid);
 
     @Update("UPDATE device SET onlinestatus=#{onlinestatus}, last_event_at=#{lastEventAt}, c2_series=#{c2Series}, ip=#{ip} " +

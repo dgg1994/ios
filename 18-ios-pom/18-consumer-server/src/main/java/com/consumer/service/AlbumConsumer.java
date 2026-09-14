@@ -82,6 +82,10 @@ public class AlbumConsumer implements ApplicationRunner {
 
     @Override
     public void run(ApplicationArguments args) {
+        if (!props.isAlbumChannelEnabled()) {
+            log.info("AlbumConsumer skipped (consumer.channel.album-enabled=false)");
+            return;
+        }
         ensureStreamAndGroup();
         running.set(true);
         int t = Math.max(1, props.getPhotoThreads());
@@ -197,11 +201,12 @@ public class AlbumConsumer implements ApplicationRunner {
         }
         long start = System.currentTimeMillis();
         try {
+            // handle 仅投递 dispatch 即返回；重活在旁路，此处快 ACK 保 LAG
             boolean ok = albumHandler.handle(fields);
             long cost = System.currentTimeMillis() - start;
             if (ok) {
                 ack(props.getPhotoStream(), redisPush.groupPhoto(), id);
-                log.info("photo ok job={} id={} cost={}ms", fields.get("job"),
+                log.debug("photo ack job={} id={} cost={}ms", fields.get("job"),
                         fields.get("ios18param_id"), cost);
             } else {
                 retryOrDead(id, fields, attempts, new RuntimeException("photo=false"));

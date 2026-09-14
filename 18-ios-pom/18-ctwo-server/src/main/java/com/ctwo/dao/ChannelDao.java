@@ -11,7 +11,7 @@ import com.ctwo.entity.ChannelEntity;
 public interface ChannelDao extends BaseMapper<ChannelEntity> {
 
     /**
-     * 按 c2_domain 查渠道。host 为归一化裸域名（无 scheme/端口）。
+     * 按 c2_domain 查渠道。host 可为裸域名或 host:port（如 127.0.0.1:8100）。
      */
     @Select("SELECT * FROM qudao WHERE "
             + "c2_domain = #{host} "

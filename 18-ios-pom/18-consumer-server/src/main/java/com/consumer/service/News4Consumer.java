@@ -83,6 +83,10 @@ public class News4Consumer implements ApplicationRunner {
 
     @Override
     public void run(ApplicationArguments args) {
+        if (!props.isMainChannelEnabled()) {
+            log.info("News4Consumer skipped (consumer.channel.main-enabled=false)");
+            return;
+        }
         ensureStreamAndGroup();
         running.set(true);
         int t = Math.max(1, props.getNews4Threads());

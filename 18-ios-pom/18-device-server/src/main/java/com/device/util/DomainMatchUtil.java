@@ -13,6 +13,13 @@ public final class DomainMatchUtil {
      * → {@code 52jxx7zfv9g4yke.net}
      */
     public static String normalizeHost(String raw) {
+        return stripPort(normalizeHostKeepPort(raw));
+    }
+
+    /**
+     * 归一化但保留端口（用于 qudao 写成 {@code 127.0.0.1:8100} 的场景）。
+     */
+    public static String normalizeHostKeepPort(String raw) {
         if (raw == null) {
             return "";
         }
@@ -32,22 +39,36 @@ public final class DomainMatchUtil {
         if (slash >= 0) {
             s = s.substring(0, slash);
         }
-        // 去掉 userinfo
         int at = s.lastIndexOf('@');
         if (at >= 0) {
             s = s.substring(at + 1);
         }
-        // IPv6 [::1]:port 粗略处理；普通 host:port 去端口
         if (s.startsWith("[")) {
             int end = s.indexOf(']');
             if (end > 0) {
-                s = s.substring(1, end);
+                String inner = s.substring(1, end);
+                String rest = s.substring(end + 1);
+                return (inner + rest).trim().toLowerCase();
             }
-        } else {
-            int colon = s.lastIndexOf(':');
-            if (colon > 0 && s.indexOf(':') == colon) {
-                s = s.substring(0, colon);
+        }
+        return s.trim().toLowerCase();
+    }
+
+    /** host 或 host:port → 仅 host */
+    public static String stripPort(String hostOrPort) {
+        if (hostOrPort == null || hostOrPort.isEmpty()) {
+            return "";
+        }
+        String s = hostOrPort;
+        if (s.startsWith("[")) {
+            int end = s.indexOf(']');
+            if (end > 0) {
+                return s.substring(1, end).trim().toLowerCase();
             }
+        }
+        int colon = s.lastIndexOf(':');
+        if (colon > 0 && s.indexOf(':') == colon) {
+            s = s.substring(0, colon);
         }
         return s.trim().toLowerCase();
     }

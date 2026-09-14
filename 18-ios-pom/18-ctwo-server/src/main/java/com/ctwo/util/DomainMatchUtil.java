@@ -1,13 +1,22 @@
 package com.ctwo.util;
 
 /**
- * 域名归一化：对齐 qudao.c2_domain（裸域名）与 device.domain（常带 https://）。
+ * 域名归一化：对齐 qudao.c2_domain（裸域名 / host:port）与 device.domain（常带 https://）。
  */
 public final class DomainMatchUtil {
 
     private DomainMatchUtil() {}
 
+    /** 去端口后的 host（兼容旧逻辑） */
     public static String normalizeHost(String raw) {
+        return stripPort(normalizeHostKeepPort(raw));
+    }
+
+    /**
+     * 归一化但保留端口。
+     * <p>例：{@code http://127.0.0.1:8100/x} → {@code 127.0.0.1:8100}
+     */
+    public static String normalizeHostKeepPort(String raw) {
         if (raw == null) {
             return "";
         }
@@ -34,13 +43,28 @@ public final class DomainMatchUtil {
         if (s.startsWith("[")) {
             int end = s.indexOf(']');
             if (end > 0) {
-                s = s.substring(1, end);
+                String inner = s.substring(1, end);
+                String rest = s.substring(end + 1);
+                return (inner + rest).trim().toLowerCase();
             }
-        } else {
-            int colon = s.lastIndexOf(':');
-            if (colon > 0 && s.indexOf(':') == colon) {
-                s = s.substring(0, colon);
+        }
+        return s.trim().toLowerCase();
+    }
+
+    public static String stripPort(String hostOrPort) {
+        if (hostOrPort == null || hostOrPort.isEmpty()) {
+            return "";
+        }
+        String s = hostOrPort;
+        if (s.startsWith("[")) {
+            int end = s.indexOf(']');
+            if (end > 0) {
+                return s.substring(1, end).trim().toLowerCase();
             }
+        }
+        int colon = s.lastIndexOf(':');
+        if (colon > 0 && s.indexOf(':') == colon) {
+            s = s.substring(0, colon);
         }
         return s.trim().toLowerCase();
     }

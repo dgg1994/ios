@@ -11,7 +11,7 @@ import com.ctwo.entity.DeviceEntity;
 @Repository
 public interface DeviceDao extends BaseMapper<DeviceEntity> {
 
-	@Select("select * from device where device_id = #{uuid}")
+	@Select("select * from device where device_id = #{uuid} OR deviceid = #{uuid} order by id desc limit 1")
 	DeviceEntity findByDeviceId(@Param("uuid") String uuid);
 
 	@Select("select * from device where ip = #{ip} order by id desc limit 1")

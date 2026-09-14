@@ -14,8 +14,8 @@ public interface ChannelDao extends BaseMapper<ChannelEntity>{
 	ChannelEntity findCode(@Param("channelcode") String channelCode);
 
 	/**
-	 * 按 c2_domain 查渠道。host 为归一化裸域名（无 scheme/端口）。
-	 * 兼容库内写成 {@code example.com} / {@code https://example.com} / {@code http://example.com}。
+	 * 按 c2_domain 查渠道。host 可为裸域名或 host:port（如 127.0.0.1:8100）。
+	 * 兼容库内写成 {@code example.com} / {@code https://example.com} / {@code http://host:port}。
 	 */
 	@Select("SELECT * FROM qudao WHERE "
 			+ "c2_domain = #{host} "

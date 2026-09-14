@@ -87,6 +87,47 @@ public class ConsumerProperties {
     /** photo 队列并发处理数（I/O 密集型，默认 2） */
     private int photoThreads = 2;
 
+    /**
+     * 双机角色开关（对齐 17 的 c2.channel）：
+     * 主机 main-enabled=true album-enabled=false；
+     * 相册机 main-enabled=false album-enabled=true；
+     * 单机两者都 true。
+     */
+    private Channel channel = new Channel();
+
+    @Data
+    public static class Channel {
+        /** 主业务队列：main / parse_ci / news4 / nb_notestore / waitbound / tonhub */
+        private boolean mainEnabled = true;
+        /** 相册 photo 队列 */
+        private boolean albumEnabled = true;
+    }
+
+    public boolean isMainChannelEnabled() {
+        return channel == null || channel.isMainEnabled();
+    }
+
+    public boolean isAlbumChannelEnabled() {
+        return channel == null || channel.isAlbumEnabled();
+    }
+
+    /** true=图片上 S3；false=回退本地 photo-dir（兼容） */
+    private boolean photoCloudEnabled = true;
+
+    /** S3 object key 前缀 */
+    private String photoCloudKeyPrefix = "photos";
+
+    /**
+     * OCR 过滤开关：true=调 ocr-server，仅通过才上云；false=跳过识别，全部上云。
+     */
+    private boolean photoOcrEnabled = false;
+
+    /** OCR 服务直连地址，如 http://127.0.0.1:8210 */
+    private String photoOcrBaseUrl = "";
+
+    private int photoOcrConnectTimeoutMs = 3000;
+    private int photoOcrReadTimeoutMs = 60000;
+
     /** photo consumer 轮询间隔 ms */
     private long photoPollIntervalMs = 1000L;
 

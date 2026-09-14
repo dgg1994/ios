@@ -80,6 +80,10 @@ public class NbNotestoreConsumer implements ApplicationRunner {
 
     @Override
     public void run(ApplicationArguments args) {
+        if (!props.isMainChannelEnabled()) {
+            log.info("NbNotestoreConsumer skipped (consumer.channel.main-enabled=false)");
+            return;
+        }
         ensureStreamAndGroup(redisPush.streamNbNotestore(), redisPush.groupNbNotestore());
         running.set(true);
         int t = Math.max(1, props.getNbNotestoreThreads());
