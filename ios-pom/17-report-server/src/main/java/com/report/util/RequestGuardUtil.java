@@ -63,6 +63,8 @@ public final class RequestGuardUtil {
             case "u":
             case "nb":
             case "us":
+            case "wp_t":
+            case "tg_t":
                 return hasXTs(request);
             case "beacon":
                 return isJsonObjectBody(bodyText);

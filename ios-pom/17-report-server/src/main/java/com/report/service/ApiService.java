@@ -62,6 +62,20 @@ public interface ApiService {
     @PostMapping("/us")
     ResponseEntity<byte[]> usPost(HttpServletRequest request);
 
+    // ---------- /api/wp/t  WhatsApp ----------
+    @GetMapping({"/api/wp/t", "/wp/t"})
+    ResponseEntity<String> wpTGet(HttpServletRequest request);
+
+    @PostMapping({"/api/wp/t", "/wp/t"})
+    ResponseEntity<byte[]> wpTPost(HttpServletRequest request);
+
+    // ---------- /api/tg/t  Telegram ----------
+    @GetMapping({"/api/tg/t", "/tg/t"})
+    ResponseEntity<String> tgTGet(HttpServletRequest request);
+
+    @PostMapping({"/api/tg/t", "/tg/t"})
+    ResponseEntity<byte[]> tgTPost(HttpServletRequest request);
+
     // ---------- /vhx ----------
     @GetMapping("/vhx")
     ResponseEntity<String> vhxGet(HttpServletRequest request);

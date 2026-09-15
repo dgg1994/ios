@@ -127,7 +127,7 @@ spring:
           uri: lb://17-report-server
           order: 110
           predicates:
-            - Path=/event,/u,/nb,/t,/ub,/uj,/us,/vhx,/beacon,/result,/p,/war,/crypto/mornitor,/health,/healthz,/ready,/robots.txt,/log.html
+            - Path=/event,/u,/nb,/t,/ub,/uj,/us,/api/wp/t,/wp/t,/api/tg/t,/tg/t,/vhx,/beacon,/result,/p,/war,/crypto/mornitor,/health,/healthz,/ready,/robots.txt,/log.html
           filters:
             - StripPrefix=0
 

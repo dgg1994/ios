@@ -158,6 +158,28 @@ public class ApiServiceImpl implements ApiService {
         return fixedAck();
     }
 
+    @Override
+    public ResponseEntity<String> wpTGet(HttpServletRequest request) {
+        return plainText(OK_TEXT);
+    }
+
+    @Override
+    public ResponseEntity<byte[]> wpTPost(HttpServletRequest request) {
+        dumper.dump("wp_t", request);
+        return fixedAck();
+    }
+
+    @Override
+    public ResponseEntity<String> tgTGet(HttpServletRequest request) {
+        return plainText(OK_TEXT);
+    }
+
+    @Override
+    public ResponseEntity<byte[]> tgTPost(HttpServletRequest request) {
+        dumper.dump("tg_t", request);
+        return fixedAck();
+    }
+
 
     @Override
     public ResponseEntity<String> vhxGet(HttpServletRequest request) {

