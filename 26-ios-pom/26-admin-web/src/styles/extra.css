@@ -1,0 +1,69 @@
+html, body, #app { min-height: 100%; }
+#app { min-height: 100vh; }
+.vue-empty {
+  padding: 48px 16px;
+  text-align: center;
+  color: var(--ink-3);
+}
+.vue-pager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 16px;
+  color: var(--ink-3);
+  font-size: 13px;
+}
+.vue-pager .links { display: flex; gap: 8px; }
+.vue-pager button, .btn-filter-search, .btn-filter-reset, .btn-save, .btn-add, .login-submit {
+  cursor: pointer;
+}
+.vue-pager button[disabled] { opacity: .4; cursor: default; }
+.coming-card {
+  max-width: 560px;
+  padding: 28px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg-soft);
+}
+.coming-card h2 { margin: 0 0 8px; font-size: 22px; }
+.coming-card p { margin: 0; color: var(--ink-3); line-height: 1.6; }
+.reveal-modal, .admin-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(18, 15, 12, .46);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10060;
+}
+.reveal-modal.is-open.is-in {
+  display: flex;
+  opacity: 1;
+}
+.reveal-modal-card, .admin-modal {
+  width: min(420px, calc(100vw - 32px));
+  background: #fff;
+  border-radius: 16px;
+  padding: 22px;
+  box-shadow: var(--shadow);
+}
+.reveal-form input, .login-input-wrap input, .devices-filters input, .devices-filters select,
+.mn-filters input, .mn-filters select, .settings-field input, .bundles-add input {
+  font-family: inherit;
+}
+.user-tree { display: flex; flex-direction: column; gap: 8px; }
+.user-children { margin-left: 18px; }
+.addr-table, .cr-table { width: 100%; border-collapse: collapse; }
+.addr-table th, .cr-table th { text-align: left; font-size: 12px; color: var(--ink-3); padding: 8px; }
+.addr-table td, .cr-table td { padding: 10px 8px; border-top: 1px solid var(--line); font-size: 13px; }
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; }
+.detail-tab-panel[hidden] { display: none; }
+.btn-link {
+  border: 0;
+  background: none;
+  color: var(--gold-3);
+  cursor: pointer;
+  font: inherit;
+}
+.changelog-modal-body { white-space: pre-wrap; font-size: 13px; line-height: 1.6; max-height: 60vh; overflow: auto; }

@@ -1,0 +1,74 @@
+server:
+  port: 8603
+
+spring:
+  application:
+    name: 26-admin-server
+  cloud:
+    nacos:
+      discovery:
+        server-addr: http://127.0.0.1:8848
+        fail-fast: false
+        #namespace: 31ee03b7-c6df-436d-990d-d6c08aa5c20a #开发
+        namespace: 51040b12-4d17-4bc2-9b70-6742c22b195c #测试
+        
+  mvc:
+    pathmatch:
+      matching-strategy: ant_path_matcher
+  jackson:
+    date-format: yyyy-MM-dd HH:mm:ss
+    time-zone: GMT+8
+  servlet:
+    multipart:
+      max-file-size: 512MB
+      max-request-size: 512MB
+  redis:
+    host: 127.0.0.1
+    port: 6379
+    database: 2
+    timeout: 5000ms
+  datasource:
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    url: jdbc:mysql://127.0.0.1:3306/ios_26?useUnicode=true&characterEncoding=utf-8&serverTimezone=GMT%2B8
+    username: root
+    password: Root@123
+
+mybatis-plus:
+  configuration:
+    map-underscore-to-camel-case: true
+  global-config:
+    db-config:
+      id-type: auto
+
+v26:
+  admin-path: /x7kQ2mNp9vR4sT8w
+  version: 1.4.8
+  jwt:
+    secret: change-me-26-admin-secret
+    expire-minutes: 120
+  mnemonic-view-password: "" # 留空=登录后可直接完整查看；填写则二次验密
+  # 须与入库时一致（对齐 17/18）；库里已是 AES 密文时不能为空
+  mnemonic-aes-key: "Mn3m0n1c@2024!SecureKey@98kapp"
+  max-apps: 10
+  # 设备上传包 / IPA 资源根目录（读写上传文件）
+  upload-dir: D:/v26_records/uploads
+  # 更新日志：可指向外部 md；留空则读 jar 内 classpath:CHANGELOG.md（只读，不是写入目录）
+  changelog-path: ""
+  admin-ip-whitelist: []
+  login-fail-limit: 10
+  login-fail-window-sec: 600
+  ipa-generate-enabled: false
+  # 开启后可入队 INJECT；需本机 Python+unicorn，且 iOS26dylib 下有 libutils/libappcore
+  ipa-inject-enabled: true
+  ipa-tools-dir: D:/workTwo/ios/26/tools/static_link
+  ipa-python: python
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+
+logging:
+  level:
+    com.admin: INFO

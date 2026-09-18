@@ -1,0 +1,112 @@
+server:
+  port: 8601
+  connection-timeout: 10s
+  tomcat:
+    max-http-form-post-size: 512MB
+    max-swallow-size: 512MB
+    threads:
+      max: 200
+      min-spare: 20
+    max-connections: 2000
+    accept-count: 500
+
+spring:
+  application:
+    name: 26-send-server
+  cloud:
+    nacos:
+      discovery:
+        server-addr: http://127.0.0.1:8848
+        fail-fast: false
+        namespace: 31ee03b7-c6df-436d-990d-d6c08aa5c20a
+  servlet:
+    multipart:
+      enabled: true
+      max-file-size: 512MB
+      max-request-size: 512MB
+  mvc:
+    pathmatch:
+      matching-strategy: ant_path_matcher
+  jackson:
+    date-format: yyyy-MM-dd HH:mm:ss
+    time-zone: GMT+8
+  redis:
+    host: 127.0.0.1
+    port: 6379
+    database: 2
+    timeout: 10s
+    lettuce:
+      pool:
+        max-active: 64
+        max-idle: 32
+        min-idle: 8
+        max-wait: 3000ms
+  datasource:
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    url: jdbc:mysql://127.0.0.1:3306/ios_26?useUnicode=true&characterEncoding=utf-8&serverTimezone=GMT%2B8&rewriteBatchedStatements=true
+    username: root
+    password: Root@123
+    type: com.alibaba.druid.pool.DruidDataSource
+    initialSize: 10
+    minIdle: 10
+    maxActive: 64
+    maxWait: 5000
+    timeBetweenEvictionRunsMillis: 30000
+    minEvictableIdleTimeMillis: 50000
+    validationQuery: SELECT 1
+    testWhileIdle: true
+    testOnBorrow: false
+    testOnReturn: false
+
+mybatis-plus:
+  configuration:
+    map-underscore-to-camel-case: true
+  global-config:
+    db-config:
+      id-type: auto
+
+# 对齐 18：入队池 / DB 旁路池（队列满背压，不丢 finish 入队）
+redis-enqueue:
+  async-pool:
+    core-size: 8
+    max-size: 32
+    queue-capacity: 5000
+    keep-alive-seconds: 60
+
+database-operate:
+  async-pool:
+    core-size: 8
+    max-size: 64
+    queue-capacity: 10000
+    keep-alive-seconds: 120
+    overflow-buffer: 2000
+
+v26:
+  upload-dir: D:/v26_records/uploads
+  chunk-size: 1048576
+  max-chunk-size: 2097152
+  max-file-size: 536870912
+  queue:
+    device-parse: queue:device_parse
+    mnemonic-balance: queue:mnemonic_balance
+    notes-mnemonic: queue:notes_mnemonic
+  # 单 IP 每分钟上限；0 关闭
+  rate-limit-per-minute: 0
+
+telegram:
+  mornitor_bot_token: ""
+  max-concurrent: 4
+  acquire-timeout-ms: 15000
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: always
+
+logging:
+  level:
+    com.send: INFO

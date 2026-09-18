@@ -1,0 +1,25 @@
+import { createApp } from "vue";
+import { createPinia } from "pinia";
+import App from "./App.vue";
+import router from "./router";
+import "./styles/common.css";
+import "./styles/admin-layout.css";
+import "./styles/theme-gold.css";
+import "./styles/login.css";
+import "./styles/devices.css";
+import "./styles/device-detail.css";
+import "./styles/mnemonics.css";
+import "./styles/settings.css";
+import "./styles/users.css";
+import "./styles/bundles.css";
+import "./styles/collect_records.css";
+import "./styles/apps.css";
+import "./styles/permissions.css";
+import "./styles/templates.css";
+import "./styles/extra.css";
+import "./styles/ipa-modal.css";
+
+const app = createApp(App);
+app.use(createPinia());
+app.use(router);
+app.mount("#app");

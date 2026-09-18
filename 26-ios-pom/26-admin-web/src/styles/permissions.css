@@ -1,0 +1,272 @@
+/* 权限配置 — light */
+
+.perm-head h1 {
+  margin: 0;
+  font-size: 26px;
+  line-height: 1;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+}
+
+.perm-head .rule {
+  margin-top: 12px;
+  width: 36px;
+  height: 2px;
+  background: var(--gold-grad);
+}
+
+.perm-sub {
+  margin: 16px 0 20px;
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  color: #6b6b73;
+}
+
+.perm-form {
+  width: 100%;
+  min-width: 0;
+  overflow-x: hidden;
+}
+
+.perm-panel {
+  border: 1px solid rgba(20, 20, 22, 0.1);
+  background: #ffffff;
+  padding: 20px 22px;
+  margin-bottom: 16px;
+  min-width: 0;
+}
+
+.perm-label {
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  color: #9c9ca6;
+  text-transform: uppercase;
+  margin-bottom: 14px;
+}
+
+.perm-label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+
+.perm-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid rgba(20, 20, 22, 0.06);
+  padding: 11px 0;
+  font-size: 13px;
+}
+
+.perm-row:last-child {
+  border-bottom: 0;
+}
+
+.perm-name {
+  color: var(--ink);
+  font-weight: 500;
+}
+
+.perm-en {
+  margin-left: 8px;
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  color: #9c9ca6;
+}
+
+.perm-code {
+  font-size: 11px;
+  color: #8a8a94;
+}
+
+.perm-role {
+  border: 1px solid rgba(20, 20, 22, 0.1);
+  padding: 16px;
+  margin-bottom: 12px;
+  background: #fafafa;
+}
+
+.perm-role:last-child {
+  margin-bottom: 0;
+}
+
+.perm-role.is-locked {
+  background: #f3f3f1;
+}
+
+.perm-role-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+  flex-wrap: wrap;
+}
+
+.perm-role-name {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.perm-role-code {
+  margin-left: 8px;
+  font-size: 11px;
+  color: #9c9ca6;
+}
+
+.perm-lock-hint {
+  margin-left: 10px;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  color: #8a8a94;
+  border: 1px solid rgba(20, 20, 22, 0.12);
+  padding: 2px 8px;
+}
+
+.perm-role-remark {
+  font-size: 11px;
+  color: #8a8a94;
+}
+
+.perm-checks {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+}
+
+.perm-check {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid rgba(20, 20, 22, 0.12);
+  background: #ffffff;
+  padding: 10px 12px;
+  cursor: pointer;
+  user-select: none;
+  overflow: hidden;
+  min-width: 0;
+}
+
+.perm-check.is-disabled {
+  opacity: 0.72;
+  cursor: default;
+}
+
+.perm-check.is-super-only {
+  border-style: dashed;
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
+.perm-check:focus-within {
+  outline: 2px solid rgba(201, 162, 39, 0.55);
+  outline-offset: 2px;
+}
+
+.perm-check input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  opacity: 0;
+  pointer-events: none;
+  appearance: none;
+  -webkit-appearance: none;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.perm-check input:focus,
+.perm-check input:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+
+.perm-check-ui {
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+  border: 1px solid rgba(20, 20, 22, 0.28);
+  background: #ffffff;
+  position: relative;
+}
+
+.perm-check input:checked + .perm-check-ui {
+  background: var(--gold-grad);
+  border-color: var(--ink);
+}
+
+.perm-check input:checked + .perm-check-ui::after {
+  content: "";
+  position: absolute;
+  left: 4px;
+  top: 1px;
+  width: 4px;
+  height: 8px;
+  border: solid #ffffff;
+  border-width: 0 1.5px 1.5px 0;
+  transform: rotate(45deg);
+}
+
+.perm-check-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.perm-check-text .n {
+  font-size: 13px;
+  color: var(--ink);
+  font-weight: 500;
+}
+
+.perm-check-text .e {
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  color: #9c9ca6;
+}
+
+.btn-perm-save {
+  appearance: none;
+  border: 0;
+  background: var(--gold-grad);
+  color: #1a1714;
+  padding: 10px 18px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+}
+
+.btn-perm-save:hover {
+  filter: brightness(1.04); background: var(--gold-grad);
+}
+
+.perm-foot {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+
+.perm-tip {
+  margin: 0;
+  flex: 1;
+  font-size: 12px;
+  line-height: 1.6;
+  color: #8a8a94;
+  max-width: 520px;
+}

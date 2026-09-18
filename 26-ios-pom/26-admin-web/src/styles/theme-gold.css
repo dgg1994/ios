@@ -1,0 +1,271 @@
+/* Cross-page black-gold polish for content surfaces */
+
+.admin-main-inner {
+  color: var(--ink-2);
+}
+
+/* Multi-color text hierarchy */
+.admin-main-inner h2,
+.admin-main-inner h3,
+.admin-main-inner .section-title {
+  color: var(--ink);
+}
+
+.admin-main-inner .mono,
+.admin-main-inner code,
+.admin-main-inner .app-id,
+.admin-main-inner .wallet-uuid {
+  color: var(--gold-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.admin-main-inner .muted,
+.admin-main-inner .hint,
+.admin-main-inner .sub {
+  color: var(--ink-3);
+}
+
+/* Soft panels / cards */
+.admin-main-inner .devices-filters,
+.admin-main-inner .apps-filters,
+.admin-main-inner .devices-table-card,
+.admin-main-inner .apps-add,
+.admin-main-inner .app-row,
+.admin-main-inner .users-add,
+.admin-main-inner .user-row,
+.admin-main-inner .bundles-add,
+.admin-main-inner .bundle-row,
+.admin-main-inner .perm-panel,
+.admin-main-inner .perm-role,
+.admin-main-inner .detail-panel,
+.admin-main-inner .detail-addr,
+.admin-main-inner .settings-panel,
+.admin-main-inner .apps-tip,
+.admin-main-inner .devices-empty,
+.admin-main-inner .apps-empty {
+  background: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
+}
+
+.admin-main-inner .devices-stats,
+.admin-main-inner .apps-stats,
+.admin-main-inner .users-stats {
+  color: var(--ink-3) !important;
+}
+
+.admin-main-inner .devices-stats .stat-active,
+.admin-main-inner .apps-stats .stat-on {
+  color: var(--gold-3) !important;
+}
+
+.admin-main-inner .devices-stats .dot-active,
+.admin-main-inner .apps-stats .dot-on,
+.admin-main-inner .badge-busy .dot,
+.admin-main-inner .badge-app .dot {
+  background: var(--gold) !important;
+}
+
+.admin-main-inner .devices-table tbody tr:hover {
+  background: #fffdf8 !important;
+}
+
+.admin-main-inner .app-row:hover,
+.admin-main-inner .user-row:hover,
+.admin-main-inner .bundle-row:hover {
+  background: #fffdf8 !important;
+  border-color: rgba(201, 162, 39, 0.28) !important;
+  box-shadow: 0 8px 24px rgba(201, 162, 39, 0.08);
+}
+
+.admin-main-inner .app-icon {
+  border-radius: 12px !important;
+  background: var(--bg-soft) !important;
+  border-color: var(--line) !important;
+  color: var(--gold-3) !important;
+}
+
+.admin-main-inner .btn-filter-search,
+.admin-main-inner .btn-app-add,
+.admin-main-inner .btn-app-save,
+.admin-main-inner .btn-user-add,
+.admin-main-inner .btn-user-save,
+.admin-main-inner .btn-bundle-add,
+.admin-main-inner .btn-bundle-save,
+.admin-main-inner .btn-perm-save,
+.admin-main-inner .btn-settings-save,
+.admin-main-inner .btn-row-refresh,
+.admin-main-inner .wallet-unlock button[type="submit"] {
+  background: var(--gold-grad) !important;
+  border: 0 !important;
+  color: #1a1714 !important;
+  border-radius: 10px !important;
+  font-weight: 700 !important;
+  box-shadow: 0 6px 16px rgba(201, 162, 39, 0.22);
+}
+
+.admin-main-inner .btn-filter-search:hover,
+.admin-main-inner .btn-app-add:hover:not(:disabled),
+.admin-main-inner .btn-app-save:hover,
+.admin-main-inner .btn-user-add:hover,
+.admin-main-inner .btn-perm-save:hover,
+.admin-main-inner .btn-settings-save:hover,
+.admin-main-inner .btn-row-refresh:hover:not(:disabled) {
+  filter: brightness(1.04);
+  background: var(--gold-grad) !important;
+}
+
+.admin-main-inner .btn-app-add:disabled,
+.admin-main-inner .btn-app-add:disabled:hover {
+  background: #d8d4cc !important;
+  color: #8a8680 !important;
+  box-shadow: none !important;
+  filter: none !important;
+  cursor: not-allowed;
+}
+
+/* Ghost / secondary */
+.admin-main-inner .btn-filter-reset,
+.admin-main-inner .btn-app-edit,
+.admin-main-inner .btn-app-cancel,
+.admin-main-inner .btn-regen,
+.admin-main-inner .wallet-brute-btn,
+.admin-main-inner .detail-back {
+  border-radius: 10px !important;
+  border-color: var(--line-strong) !important;
+  color: var(--ink-2) !important;
+}
+
+.admin-main-inner .detail-back:hover,
+.admin-main-inner .btn-filter-reset:hover {
+  background: var(--gold-soft) !important;
+  border-color: rgba(201, 162, 39, 0.35) !important;
+  color: var(--gold-3) !important;
+}
+
+/* Inputs — skip checkbox/radio/hidden so custom toggles don't inherit text-field size/focus ring */
+.admin-main-inner input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]):not([type="file"]),
+.admin-main-inner select,
+.admin-main-inner textarea {
+  border-radius: 10px !important;
+  border-color: var(--line-strong) !important;
+  background: #fff !important;
+  color: var(--ink) !important;
+}
+
+.admin-main-inner input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]):not([type="file"]):focus,
+.admin-main-inner select:focus,
+.admin-main-inner textarea:focus {
+  border-color: rgba(201, 162, 39, 0.55) !important;
+  box-shadow: 0 0 0 3px var(--gold-soft);
+  outline: none;
+}
+
+/* Tips / muted text */
+.admin-main-inner .apps-tip,
+.admin-main-inner .perm-sub,
+.admin-main-inner .perm-tip,
+.admin-main-inner .detail-addr-tip,
+.admin-main-inner .apps-owner-hint {
+  color: var(--ink-3) !important;
+  background: var(--bg-soft) !important;
+}
+
+.admin-main-inner .apps-tip strong,
+.admin-main-inner .device-name,
+.admin-main-inner .app-name,
+.admin-main-inner .wallet-name {
+  color: var(--ink) !important;
+}
+
+.admin-main-inner .device-owner .v,
+.admin-main-inner .app-meta .v,
+.admin-main-inner .addr-link {
+  color: var(--gold-3) !important;
+}
+
+.admin-main-inner .btn-row-refresh {
+  border-radius: 6px !important;
+  box-shadow: 0 2px 8px rgba(201, 162, 39, 0.28) !important;
+  padding: 4px 10px !important;
+  font-size: 11px !important;
+  letter-spacing: 0.06em;
+}
+
+.admin-main-inner .addr-live-tag {
+  color: var(--gold-3) !important;
+  background: var(--gold-soft) !important;
+}
+
+.admin-main-inner .addr-link:hover {
+  color: var(--gold) !important;
+}
+
+/* Badges */
+.admin-main-inner .badge,
+.admin-main-inner .badge-busy,
+.admin-main-inner .badge-ok,
+.admin-main-inner .badge-app {
+  border-radius: 999px !important;
+  background: var(--bg-muted) !important;
+  border: 1px solid var(--line) !important;
+}
+
+.admin-main-inner .badge-busy {
+  color: var(--gold-3) !important;
+}
+
+.admin-main-inner .badge-ok {
+  color: var(--success) !important;
+}
+
+/* Permissions checks */
+.admin-main-inner .perm-check {
+  border-radius: 12px !important;
+}
+
+.admin-main-inner .perm-check input:checked + .perm-check-ui {
+  background: var(--gold) !important;
+  border-color: var(--gold) !important;
+}
+
+.admin-main-inner .perm-role.is-locked {
+  background: var(--bg-soft) !important;
+}
+
+/* Device detail panels / tabs */
+.admin-main-inner .detail-panel-head,
+.admin-main-inner .detail-addr-head,
+.admin-main-inner .detail-addr-table th {
+  background: var(--bg-soft) !important;
+}
+
+.admin-main-inner .detail-tab.is-active span {
+  background: rgba(201, 162, 39, 0.16) !important;
+  color: #8f7014 !important;
+}
+
+.admin-main-inner .detail-info-row .k,
+.admin-main-inner .label,
+.admin-main-inner .app-meta .k,
+.admin-main-inner .device-meta .k {
+  color: var(--ink-4) !important;
+}
+
+.admin-main-inner .detail-info-row .v,
+.admin-main-inner .value {
+  color: var(--ink-2) !important;
+}
+
+/* Pager */
+.admin-main-inner .devices-pager a.is-current,
+.admin-main-inner .devices-pager .is-current {
+  background: var(--gold-grad) !important;
+  color: #1a1714 !important;
+  border-radius: 8px;
+}
+
+/* Users tree */
+.admin-main-inner .user-tree-toggle:hover {
+  color: var(--gold-3) !important;
+}

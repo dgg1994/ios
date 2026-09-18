@@ -1,0 +1,89 @@
+server:
+  port: 8600
+  http2:
+    enabled: true
+
+spring:
+  application:
+    name: 26-getway-server
+  cloud:
+    nacos:
+      discovery:
+        server-addr: http://127.0.0.1:8848
+        fail-fast: false
+        namespace: 31ee03b7-c6df-436d-990d-d6c08aa5c20a
+    gateway:
+      discovery:
+        locator:
+          enabled: true
+      httpclient:
+        connect-timeout: 3000
+        response-timeout: 30s
+        pool:
+          type: elastic
+          max-idle-time: 15s
+        protocol: HTTP11
+      # 网关和管理端都会写跨域头，浏览器遇到重复头会当成失败
+      default-filters:
+        - DedupeResponseHeader=Access-Control-Allow-Origin Access-Control-Allow-Credentials Access-Control-Allow-Methods Access-Control-Allow-Headers, RETAIN_FIRST
+      routes:
+        # ---------- 客户端上报 → 26-send-server ----------
+        # V2 探活
+        - id: v26-send-ready
+          uri: lb://26-send-server
+          order: 10
+          predicates:
+            - Path=/api/v2/system/ready,/
+          filters:
+            - StripPrefix=0
+
+        # V2 devices / finish（短超时）
+        - id: v26-send-api
+          uri: lb://26-send-server
+          order: 20
+          predicates:
+            - Path=/api/v2/devices,/api/v2/devices/**,/api/v2/finish
+          filters:
+            - StripPrefix=0
+
+        # V2 uploads / chunks（大文件，长超时）
+        - id: v26-send-upload
+          uri: lb://26-send-server
+          order: 30
+          predicates:
+            - Path=/api/v2/uploads,/api/v2/uploads/**
+          filters:
+            - StripPrefix=0
+          metadata:
+            response-timeout: 600s
+
+        # 协议 A（.php，当前只 ACK）
+        - id: v26-send-acq
+          uri: lb://26-send-server
+          order: 40
+          predicates:
+            - Path=/api/handshake.php,/api/session.php,/api/upload.php
+          filters:
+            - StripPrefix=0
+          metadata:
+            response-timeout: 600s
+
+        # ---------- 管理端 JSON → 26-admin-server ----------
+        - id: v26-admin-api
+          uri: lb://26-admin-server
+          order: 50
+          predicates:
+            - Path=/api/admin,/api/admin/**
+          filters:
+            - StripPrefix=0
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+
+logging:
+  level:
+    com.getway: INFO
+    gw.req: INFO

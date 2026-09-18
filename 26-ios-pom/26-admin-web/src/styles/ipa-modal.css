@@ -1,0 +1,584 @@
+/* IPA 新建任务弹窗 — 深色控制台风 */
+
+.ipa-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10020;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px 16px;
+  background: rgba(12, 10, 8, 0.62);
+  backdrop-filter: blur(6px);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s ease;
+}
+
+.ipa-overlay.is-open {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.ipa-dialog {
+  width: min(720px, 100%);
+  max-height: min(92vh, 880px);
+  overflow: auto;
+  background: #141210;
+  border: 1px solid rgba(255, 248, 234, 0.1);
+  border-radius: 16px;
+  box-shadow: 0 28px 80px rgba(0, 0, 0, 0.45);
+  color: #f5efe4;
+  padding: 22px 22px 18px;
+  transform: translateY(10px) scale(0.985);
+  transition: transform 0.22s ease;
+}
+
+.ipa-overlay.is-open .ipa-dialog {
+  transform: translateY(0) scale(1);
+}
+
+.ipa-dialog-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.ipa-dialog-head h2 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: #fff8ea;
+}
+
+.ipa-dialog-close {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: rgba(245, 239, 228, 0.45);
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 20px;
+  line-height: 1;
+}
+
+.ipa-dialog-close:hover {
+  background: rgba(255, 248, 234, 0.06);
+  color: #fff8ea;
+}
+
+.ipa-tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-bottom: 18px;
+}
+
+.ipa-tab {
+  appearance: none;
+  text-align: left;
+  border: 1px solid rgba(255, 248, 234, 0.1);
+  background: rgba(255, 248, 234, 0.03);
+  color: rgba(245, 239, 228, 0.55);
+  border-radius: 12px;
+  padding: 12px 14px;
+  cursor: pointer;
+  position: relative;
+  transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
+}
+
+.ipa-tab strong {
+  display: block;
+  font-size: 12px;
+  letter-spacing: 0.16em;
+  font-weight: 700;
+}
+
+.ipa-tab span {
+  display: block;
+  margin-top: 4px;
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  opacity: 0.75;
+}
+
+.ipa-tab.is-active {
+  border-color: rgba(201, 162, 39, 0.55);
+  background: rgba(201, 162, 39, 0.1);
+  color: #fff8ea;
+  box-shadow: inset -3px 0 0 0 #c9a227;
+}
+
+.ipa-panel[hidden] {
+  display: none !important;
+}
+
+.ipa-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 12px;
+}
+
+.ipa-grid-1 {
+  grid-template-columns: 1fr;
+}
+
+@media (min-width: 640px) {
+  .ipa-grid-3 {
+    grid-template-columns: 1.2fr 1fr 1fr;
+  }
+  .ipa-grid-2 {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+.ipa-field {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  min-width: 0;
+}
+
+.ipa-field > span {
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: rgba(228, 197, 106, 0.7);
+}
+
+.ipa-field input[type="text"],
+.ipa-field input[type="url"],
+.ipa-field select {
+  width: 100%;
+  border: 1px solid rgba(255, 248, 234, 0.12);
+  background: #1a1714;
+  color: #fff8ea;
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 13px;
+  outline: none;
+  font-family: inherit;
+}
+
+.ipa-field input::placeholder {
+  color: rgba(245, 239, 228, 0.32);
+}
+
+.ipa-field input:focus,
+.ipa-field select:focus {
+  border-color: rgba(201, 162, 39, 0.5);
+  box-shadow: 0 0 0 3px rgba(201, 162, 39, 0.12);
+}
+
+.ipa-field input.is-readonly,
+.ipa-field input:disabled {
+  opacity: 0.72;
+  cursor: default;
+}
+
+.ipa-field input.is-invalid {
+  border-color: rgba(181, 69, 58, 0.7);
+}
+
+.ipa-field-error {
+  margin: 0;
+  font-size: 11px;
+  color: #e08a7f;
+  min-height: 0;
+}
+
+.ipa-field-hint {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.4;
+  color: rgba(228, 197, 106, 0.55);
+}
+
+.ipa-field:has(.is-invalid) .ipa-field-hint {
+  display: none;
+}
+
+.ipa-toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 4px 0 2px;
+}
+
+.ipa-toggle {
+  position: relative;
+  width: 42px;
+  height: 24px;
+  flex-shrink: 0;
+}
+
+.ipa-toggle input {
+  position: absolute;
+  opacity: 0;
+  inset: 0;
+  cursor: pointer;
+  margin: 0;
+}
+
+.ipa-toggle-ui {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: 999px;
+  background: rgba(255, 248, 234, 0.12);
+  border: 1px solid rgba(255, 248, 234, 0.12);
+  transition: background 0.18s ease;
+}
+
+.ipa-toggle-ui::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: rgba(245, 239, 228, 0.55);
+  transition: transform 0.18s ease, background 0.18s ease;
+}
+
+.ipa-toggle input:checked + .ipa-toggle-ui {
+  background: linear-gradient(135deg, #f0d78c 0%, #c9a227 55%, #9a7518 100%);
+  border-color: transparent;
+}
+
+.ipa-toggle input:checked + .ipa-toggle-ui::after {
+  transform: translateX(18px);
+  background: #1a1714;
+}
+
+.ipa-toggle-label {
+  font-size: 12px;
+  color: rgba(245, 239, 228, 0.72);
+  line-height: 1.4;
+}
+
+.ipa-logo {
+  margin-top: 14px;
+}
+
+.ipa-logo > span {
+  display: block;
+  margin-bottom: 8px;
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: rgba(228, 197, 106, 0.7);
+}
+
+.ipa-logo-drop {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 140px;
+  border: 1px dashed rgba(255, 248, 234, 0.18);
+  border-radius: 14px;
+  background: rgba(255, 248, 234, 0.03);
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+  overflow: hidden;
+}
+
+.ipa-logo-drop:hover,
+.ipa-logo-drop.is-drag {
+  border-color: rgba(201, 162, 39, 0.55);
+  background: rgba(201, 162, 39, 0.08);
+}
+
+.ipa-logo-drop input[type="file"] {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.ipa-logo-ico {
+  width: 28px;
+  height: 28px;
+  color: rgba(228, 197, 106, 0.75);
+}
+
+.ipa-logo-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #fff8ea;
+}
+
+.ipa-logo-sub {
+  font-size: 11px;
+  color: rgba(245, 239, 228, 0.4);
+}
+
+.ipa-logo-preview {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #0f0d0b;
+}
+
+.ipa-logo-preview[hidden] {
+  display: none !important;
+}
+
+.ipa-logo-preview img {
+  display: block;
+  width: auto;
+  height: auto;
+  max-width: 100%;
+  max-height: 140px;
+  min-height: 48px;
+  object-fit: contain;
+}
+
+.ipa-logo-preview-clear {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  appearance: none;
+  border: 0;
+  border-radius: 8px;
+  background: rgba(20, 18, 16, 0.75);
+  color: #fff8ea;
+  padding: 4px 8px;
+  font-size: 11px;
+  cursor: pointer;
+  z-index: 2;
+}
+
+.ipa-inject-drop {
+  min-height: 200px;
+  margin-top: 4px;
+}
+
+.ipa-mode-banner {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin: 0 0 14px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid rgba(228, 197, 106, 0.35);
+  background: linear-gradient(135deg, rgba(228, 197, 106, 0.14), rgba(20, 18, 16, 0.35));
+}
+
+.ipa-mode-banner strong {
+  font-size: 12px;
+  letter-spacing: 0.12em;
+  color: #e4c56a;
+}
+
+.ipa-mode-banner span {
+  font-size: 12px;
+  color: rgba(245, 239, 228, 0.72);
+}
+
+.ipa-inject-drop.has-file .ipa-logo-ico,
+.ipa-inject-drop.has-file .ipa-logo-title,
+.ipa-inject-drop.has-file .ipa-logo-sub {
+  visibility: hidden;
+}
+
+.ipa-inject-preview {
+  flex-direction: column;
+  gap: 8px;
+  padding: 16px;
+}
+
+.ipa-inject-file-meta {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  max-width: 90%;
+  text-align: center;
+}
+
+.ipa-inject-file-meta strong {
+  font-size: 13px;
+  font-weight: 650;
+  color: #fff8ea;
+  word-break: break-all;
+}
+
+.ipa-inject-file-meta span {
+  font-size: 11px;
+  color: rgba(245, 239, 228, 0.45);
+}
+
+.ipa-dialog-foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 20px;
+  padding-top: 14px;
+  border-top: 1px solid rgba(255, 248, 234, 0.08);
+}
+
+.ipa-btn {
+  appearance: none;
+  border-radius: 10px;
+  padding: 10px 18px;
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.ipa-btn-ghost {
+  border: 1px solid rgba(255, 248, 234, 0.16);
+  background: transparent;
+  color: rgba(245, 239, 228, 0.78);
+}
+
+.ipa-btn-ghost:hover {
+  background: rgba(255, 248, 234, 0.05);
+}
+
+.ipa-btn-primary {
+  border: 0;
+  background: linear-gradient(135deg, #f0d78c 0%, #c9a227 48%, #9a7518 100%);
+  color: #1a1714;
+  box-shadow: 0 8px 20px rgba(201, 162, 39, 0.28);
+}
+
+.ipa-btn-primary:hover {
+  filter: brightness(1.04);
+}
+
+.ipa-btn-primary:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  filter: none;
+}
+
+.ipa-progress-dialog {
+  width: min(760px, 100%);
+  display: flex;
+  flex-direction: column;
+  max-height: min(88vh, 720px);
+}
+
+.ipa-progress-scroll {
+  flex: 1 1 auto;
+  min-height: 220px;
+  max-height: min(52vh, 440px);
+  overflow-x: hidden;
+  overflow-y: auto;
+  margin-top: 4px;
+  padding: 14px 14px 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 248, 234, 0.12);
+  background: #0f0d0b;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+.ipa-progress-scroll::-webkit-scrollbar {
+  width: 8px;
+}
+
+.ipa-progress-scroll::-webkit-scrollbar-thumb {
+  background: rgba(201, 162, 39, 0.35);
+  border-radius: 999px;
+}
+
+.ipa-progress-scroll::-webkit-scrollbar-track {
+  background: rgba(255, 248, 234, 0.04);
+}
+
+.ipa-progress-summary {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  margin: -14px -14px 12px;
+  padding: 14px 14px 12px;
+  background: linear-gradient(180deg, #0f0d0b 0%, #0f0d0b 78%, rgba(15, 13, 11, 0) 100%);
+  border-bottom: 1px solid rgba(255, 248, 234, 0.08);
+}
+
+.ipa-progress-meta {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.ipa-progress-meta span {
+  font-size: 13px;
+  color: rgba(245, 239, 228, 0.88);
+  line-height: 1.45;
+  min-width: 0;
+  word-break: break-word;
+}
+
+.ipa-progress-meta strong {
+  font-size: 14px;
+  color: #e4c56a;
+  letter-spacing: 0.04em;
+  flex-shrink: 0;
+}
+
+.ipa-progress-track {
+  height: 10px;
+  border-radius: 999px;
+  background: rgba(255, 248, 234, 0.08);
+  overflow: hidden;
+  border: 1px solid rgba(255, 248, 234, 0.1);
+}
+
+.ipa-progress-bar {
+  height: 100%;
+  width: 0;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #9a7518 0%, #c9a227 45%, #f0d78c 100%);
+  transition: width 0.35s ease;
+}
+
+.ipa-log-label {
+  margin-bottom: 8px;
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: rgba(228, 197, 106, 0.7);
+}
+
+.ipa-log {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: rgba(220, 232, 210, 0.88);
+  font-size: 11px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.ipa-progress-foot {
+  flex-shrink: 0;
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid rgba(255, 248, 234, 0.08);
+}
+
+#ipa-progress-download[hidden] {
+  display: none !important;
+}

