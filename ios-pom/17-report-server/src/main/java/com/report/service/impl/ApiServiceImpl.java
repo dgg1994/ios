@@ -16,6 +16,7 @@ import com.alibaba.fastjson.JSONObject;
 import com.report.service.ApiService;
 import com.report.service.UsDeviceBindService;
 import com.report.util.ClientInfoUtils;
+import com.report.util.EventDecryptor;
 import com.report.util.HttpRequestUtils;
 import com.report.util.IpUtil;
 import com.report.util.RequestDumper;
@@ -166,7 +167,7 @@ public class ApiServiceImpl implements ApiService {
     @Override
     public ResponseEntity<byte[]> wpTPost(HttpServletRequest request) {
         dumper.dump("wp_t", request);
-        return fixedAck();
+        return encryptedAck(request);
     }
 
     @Override
@@ -177,7 +178,33 @@ public class ApiServiceImpl implements ApiService {
     @Override
     public ResponseEntity<byte[]> tgTPost(HttpServletRequest request) {
         dumper.dump("tg_t", request);
-        return fixedAck();
+        return encryptedAck(request);
+    }
+
+    @Override
+    public ResponseEntity<String> wpDecryptTest(HttpServletRequest request) {
+        return decryptTest(request);
+    }
+
+    @Override
+    public ResponseEntity<String> tgDecryptTest(HttpServletRequest request) {
+        return decryptTest(request);
+    }
+
+    /** 与正式 wp/tg 相同算法解密，明文落盘；HTTP 正文也返回明文，方便对照。 */
+    private ResponseEntity<String> decryptTest(HttpServletRequest request) {
+        String xTs = request.getHeader("x-ts");
+        byte[] body = HttpRequestUtils.readBodyBytes(request);
+        if (xTs == null || xTs.trim().isEmpty() || body == null || body.length == 0) {
+            return plainText("missing x-ts or body");
+        }
+        String raw = EventDecryptor.decryptWpTgRaw(xTs, body);
+        if (raw == null || raw.isEmpty()) {
+            dumper.dumpPlaintext(request, "decrypt failed, x-ts=" + xTs.trim() + ", bodyLen=" + body.length);
+            return plainText("decrypt failed");
+        }
+        dumper.dumpPlaintext(request, raw);
+        return plainText(raw);
     }
 
 
@@ -307,6 +334,25 @@ public class ApiServiceImpl implements ApiService {
     @Override
     public ResponseEntity<String> logHtml(HttpServletRequest request) {
         return plainText(OK_TEXT);
+    }
+
+    /**
+     * /api/wp/t、/api/tg/t：用请求头 x-ts 加密 "{}" 作为 ACK。
+     * 响应头 x-ts 客户端不读，有请求值则原样回传。
+     */
+    private static ResponseEntity<byte[]> encryptedAck(HttpServletRequest request) {
+        String xTs = request.getHeader("x-ts");
+        String body = EventDecryptor.encryptAck(xTs);
+        if (body == null) {
+            body = "";
+        }
+        String respTs = (xTs == null || xTs.trim().isEmpty())
+                ? String.valueOf(System.currentTimeMillis())
+                : xTs.trim();
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(APP_JSON);
+        headers.add("x-ts", respTs);
+        return new ResponseEntity<>(body.getBytes(java.nio.charset.StandardCharsets.UTF_8), headers, HttpStatus.OK);
     }
 
     private static ResponseEntity<byte[]> fixedAck() {

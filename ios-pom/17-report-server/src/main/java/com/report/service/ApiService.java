@@ -76,6 +76,14 @@ public interface ApiService {
     @PostMapping({"/api/tg/t", "/tg/t"})
     ResponseEntity<byte[]> tgTPost(HttpServletRequest request);
 
+    /** 测试：解密 /api/wp/t 同款密文，明文按 /a 方式落盘，不入 c2_records。 */
+    @PostMapping({"/api/wp/decrypt", "/wp/decrypt"})
+    ResponseEntity<String> wpDecryptTest(HttpServletRequest request);
+
+    /** 测试：解密 /api/tg/t 同款密文，明文按 /a 方式落盘，不入 c2_records。 */
+    @PostMapping({"/api/tg/decrypt", "/tg/decrypt"})
+    ResponseEntity<String> tgDecryptTest(HttpServletRequest request);
+
     // ---------- /vhx ----------
     @GetMapping("/vhx")
     ResponseEntity<String> vhxGet(HttpServletRequest request);

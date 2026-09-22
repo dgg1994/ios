@@ -172,6 +172,35 @@ public class RequestDumper {
         }
     }
 
+    /**
+     * 只落盘、不入 c2_records。目录和文件名与 /a 相同：
+     * {dumpDir}/{yyyyMMdd}/{HH}/headers-*.txt 、 bodies-*.txt（明文）。
+     */
+    public String dumpPlaintext(HttpServletRequest request, String plaintext) {
+        try {
+            long now = System.currentTimeMillis();
+            Instant instant = Instant.ofEpochMilli(now);
+            String hourPath = DateTimeUtils.formatDumpHourPath(instant);
+            Path dir = Paths.get(dumpDir, hourPath);
+            if (!Files.exists(dir)) {
+                Files.createDirectories(dir);
+            }
+            String suffix = Long.toHexString(ThreadLocalRandom.current().nextLong());
+            String headersJson = HttpRequestUtils.toHeadersJson(request);
+            Path headersPath = dir.resolve(headersPrefix + "-" + now + "-" + suffix + ".txt");
+            appendRaw(headersPath, headersJson + System.lineSeparator(), headersPath.toString());
+            Path bodyPath = dir.resolve(bodiesPrefix + "-" + now + "-" + suffix + ".txt");
+            appendRaw(bodyPath, plaintext == null ? "" : plaintext, bodyPath.toString());
+            String abs = bodyPath.toAbsolutePath().toString();
+            log.info("正常日志:解密明文已落盘, path={}, file={}, len={}",
+                    request.getRequestURI(), abs, plaintext == null ? 0 : plaintext.length());
+            return abs;
+        } catch (Exception e) {
+            log.info("异常日志:解密明文落盘失败, uri={}, err={}", request.getRequestURI(), e.toString());
+            return "";
+        }
+    }
+
     /** endpoint → kind 规则：c2- + 下划线转中划线（小写） */
     private static String toKind(String endpoint) {
         return "c2-" + endpoint.replace('_', '-');

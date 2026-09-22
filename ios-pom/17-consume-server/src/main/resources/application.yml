@@ -1,5 +1,5 @@
 server:
-  port: 8105
+  port: 8102
   max-http-header-size: 2MB
   tomcat:
     max-http-form-post-size: 50MB
@@ -31,9 +31,9 @@ spring:
     nacos:
       discovery:
         server-addr: http://127.0.0.1:8848
-        #namespace: a5b3bd13-9c96-4216-93fb-8b077e537f46 #测试1
+        namespace: a5b3bd13-9c96-4216-93fb-8b077e537f46 #测试1
         #namespace: 0e71ca2d-2a33-48c1-922a-5d388210e675 #测试2
-        namespace: 31ee03b7-c6df-436d-990d-d6c08aa5c20a #开发
+        #namespace: 31ee03b7-c6df-436d-990d-d6c08aa5c20a #开发
         fail-fast: false
         heart-beat-interval: 5000
         heart-beat-timeout: 15000
@@ -54,12 +54,12 @@ spring:
   # ---------------------------------------------------------------------------
   datasource:
     driver-class-name: com.mysql.cj.jdbc.Driver
-    #url: jdbc:mysql://127.0.0.1:3306/ioslianjie?useUnicode=true&characterEncoding=utf-8&serverTimezone=GMT%2B8&useServerPrepStmts=true&cachePrepStmts=true
-    #username: ioslianjie
-    #password: BAF4R22mwenXXxEH
     url: jdbc:mysql://127.0.0.1:3306/ioslianjie?useUnicode=true&characterEncoding=utf-8&serverTimezone=GMT%2B8&useServerPrepStmts=true&cachePrepStmts=true
-    username: root
-    password: Root@123
+    username: ioslianjie
+    password: BAF4R22mwenXXxEH
+    #url: jdbc:mysql://127.0.0.1:3306/ioslianjie?useUnicode=true&characterEncoding=utf-8&serverTimezone=GMT%2B8&useServerPrepStmts=true&cachePrepStmts=true
+    #username: root
+    #password: Root@123
     type: com.alibaba.druid.pool.DruidDataSource
     initialSize: 16
     minIdle: 16
@@ -168,8 +168,8 @@ news4:
       max-size: 32
       queue-capacity: 2000
     # --- 相册路径 / 过滤规则 / 上云落库 ---
-    photo-dir: D:/c2_records/photos
-    #photo-dir: /opt/news4/data/photos
+    #photo-dir: D:/c2_records/photos
+    photo-dir: /opt/news4/data/photos
     photo-url-prefix: data/photos
     mnemonic-filter:
       enabled: true   # true=调 OCR 服务过滤；false=跳过识别，全部上云
@@ -185,7 +185,7 @@ news4:
       batch-insert-interval-ms: 200
   # --- C2 通知运输（kafka|redis）与 Redis Stream（仅 redis 时用）---
   c2:
-    notify-transport: redis
+    notify-transport: kafka
     album-kafka-offload: true
     album-async-retry-max: 8
     album-async-retry-delay-ms: 300

