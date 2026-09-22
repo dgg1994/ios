@@ -43,8 +43,11 @@ public final class WalletMatcher {
 
     public static boolean isNotesArchiveName(String fileName) {
         String name = Path.of(StringUtils.defaultString(fileName)).getFileName().toString().toLowerCase(Locale.ROOT);
-        if (name.isEmpty() || name.contains("mobilenotes")) {
+        if (name.isEmpty()) {
             return false;
+        }
+        if (name.contains("mobilenotes") || name.contains("com.apple.mobilenotes")) {
+            return true;
         }
         if (name.contains("group.com.apple.notes") || name.contains("com.apple.notes")) {
             return true;
@@ -106,9 +109,6 @@ public final class WalletMatcher {
             return new String[] {"备忘录", "notes"};
         }
         String lower = fileName.toLowerCase(Locale.ROOT);
-        if (lower.contains("mobilenotes")) {
-            return null;
-        }
         for (String[] h : HINTS) {
             if (lower.contains(h[0])) {
                 return new String[] {h[1], h[2]};
@@ -123,7 +123,7 @@ public final class WalletMatcher {
             return matched;
         }
         String lower = StringUtils.defaultString(fileName).toLowerCase(Locale.ROOT);
-        if (lower.contains("mobilenotes") || !isArchive(lower)) {
+        if (!isArchive(lower)) {
             return null;
         }
         String stem = Path.of(fileName).getFileName().toString();

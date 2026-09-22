@@ -1,5 +1,6 @@
 <template>
-  <div>
+  <div class="list-fill">
+    <div class="list-fill-head">
     <div class="mn-head"><h1>助记词</h1><div class="rule"></div></div>
     <p class="mn-sub">WALLET · 已解析入库的助记词（列表脱敏；点击完整查看直接展示明文）</p>
     <form class="mn-filters" @submit.prevent="search">
@@ -15,6 +16,7 @@
         <span class="mn-selected-hint">已选 {{ selected.length }}</span>
         <button type="button" class="btn-mn-derive" :disabled="!selected.length" @click="derive">派生地址</button>
       </div>
+    </div>
     </div>
     <div class="mn-table-card">
       <div v-if="!items.length" class="mn-empty">暂无助记词数据</div>
@@ -48,7 +50,7 @@
         </tbody>
       </table>
     </div>
-    <div class="vue-pager" v-if="total">
+    <div class="vue-pager list-fill-foot" v-if="total">
       <div>第 {{ page + 1 }} / {{ totalPages || 1 }} 页 · 共 {{ total }} 条</div>
       <div class="links">
         <button :disabled="page<=0" @click="go(page-1)">上一页</button>

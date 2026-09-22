@@ -1,7 +1,11 @@
 package com.admin.crypto;
 
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import java.util.Base64;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.regex.Matcher;
@@ -16,14 +20,10 @@ import com.alibaba.fastjson.JSONArray;
 import com.alibaba.fastjson.JSONObject;
 
 /**
- * Tonhub MMKV PIN 解锁 / 爆破，对齐 Python wallet_unlock tonhub_*。
+ * Tonhub MMKV PIN 解锁 / 爆破。盐和 enc key 按 18 的 MMKV 键值读取，不靠正则猜长度。
  */
 public final class TonhubCrypto {
 
-    private static final Pattern SALT = Pattern.compile("ton-storage-passcode-naclA@([0-9a-f]{64})");
-    private static final Pattern ENC_KEY = Pattern.compile(
-            "ton-storage-passcode-enc-key-([0-9a-f]{64}).{0,4}([A-Za-z0-9+/=]{80,120})",
-            Pattern.DOTALL);
     private static final Pattern WALLET_JSON = Pattern.compile(
             "\\{\"version\":2,\"selected\":\\d+,\"addresses\":\\[.*?\\]\\}");
 
@@ -34,19 +34,18 @@ public final class TonhubCrypto {
         if (raw == null || raw.length == 0) {
             throw new IllegalArgumentException("tonhub mmkv empty");
         }
-        String asLatin = new String(raw, StandardCharsets.ISO_8859_1);
-        Matcher sm = SALT.matcher(asLatin);
-        if (!sm.find()) {
+        Map<String, byte[]> kv = readMmkv(raw);
+        String salt = mmkvStr(kv.get("ton-storage-passcode-nacl"));
+        if (salt.isEmpty()) {
             throw new IllegalArgumentException("tonhub salt not found");
         }
-        String salt = sm.group(1);
-        Matcher em = ENC_KEY.matcher(asLatin);
-        if (!em.find()) {
+        String ref = mmkvStr(kv.get("ton-storage-ref"));
+        String encB64 = mmkvStr(ref.isEmpty() ? null : kv.get("ton-storage-passcode-enc-key-" + ref));
+        if (encB64.isEmpty()) {
             throw new IllegalArgumentException("tonhub enc key not found");
         }
-        String b64 = em.group(2).replaceAll("[^A-Za-z0-9+/=]", "");
-        byte[] encAppKey = b64decode(b64);
-        Matcher wm = WALLET_JSON.matcher(asLatin);
+        byte[] encAppKey = b64decode(encB64);
+        Matcher wm = WALLET_JSON.matcher(new String(raw, StandardCharsets.ISO_8859_1));
         if (!wm.find()) {
             throw new IllegalArgumentException("tonhub wallet json not found");
         }
@@ -56,6 +55,73 @@ public final class TonhubCrypto {
         out.put("enc_app_key", encAppKey);
         out.put("wallet", wallet);
         return out;
+    }
+
+    /** 首字节等于剩余长度时，去掉这个长度前缀。 */
+    private static String mmkvStr(byte[] value) {
+        if (value == null || value.length == 0) {
+            return "";
+        }
+        if ((value[0] & 0xFF) == value.length - 1) {
+            return new String(value, 1, value.length - 1, StandardCharsets.UTF_8);
+        }
+        return new String(value, StandardCharsets.UTF_8);
+    }
+
+    /**
+     * 前 4 字节是内容长度，再跳过 4 字节，后面按变长整数读 key、value。
+     */
+    private static Map<String, byte[]> readMmkv(byte[] data) {
+        Map<String, byte[]> out = new HashMap<>();
+        if (data == null || data.length < 12) {
+            return out;
+        }
+        int actualSize = ByteBuffer.wrap(data, 0, 4).order(ByteOrder.LITTLE_ENDIAN).getInt();
+        int pos = 8;
+        int limit = Math.min(8 + Math.max(actualSize, 0), data.length);
+        while (pos < limit) {
+            int[] keyLen = readVarint(data, pos);
+            if (keyLen == null) {
+                break;
+            }
+            pos = keyLen[1];
+            int klen = keyLen[0];
+            if (klen <= 0 || klen > 2048 || pos + klen > data.length) {
+                break;
+            }
+            String key = new String(data, pos, klen, StandardCharsets.UTF_8);
+            pos += klen;
+            int[] valLen = readVarint(data, pos);
+            if (valLen == null) {
+                break;
+            }
+            pos = valLen[1];
+            int vlen = valLen[0];
+            if (vlen < 0 || pos + vlen > data.length) {
+                break;
+            }
+            out.put(key, Arrays.copyOfRange(data, pos, pos + vlen));
+            pos += vlen;
+        }
+        return out;
+    }
+
+    private static int[] readVarint(byte[] data, int pos) {
+        int n = 0;
+        int shift = 0;
+        while (pos < data.length) {
+            int b = data[pos] & 0xFF;
+            pos++;
+            n |= (b & 0x7F) << shift;
+            if ((b & 0x80) == 0) {
+                return new int[] {n, pos};
+            }
+            shift += 7;
+            if (shift > 35) {
+                return null;
+            }
+        }
+        return null;
     }
 
     public static String decryptPin(String passcode, String salt, byte[] encAppKey, byte[] secretKeyEnc) {

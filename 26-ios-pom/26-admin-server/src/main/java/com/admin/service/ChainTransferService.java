@@ -4,7 +4,6 @@ import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.math.RoundingMode;
 import java.nio.charset.StandardCharsets;
-import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
@@ -20,7 +19,6 @@ import org.web3j.crypto.RawTransaction;
 import org.web3j.crypto.TransactionEncoder;
 import org.web3j.utils.Numeric;
 
-import com.admin.util.BIP32Util;
 import com.admin.util.WalletAddressUtil;
 import com.alibaba.fastjson.JSON;
 import com.alibaba.fastjson.JSONArray;
@@ -30,7 +28,7 @@ import lombok.extern.slf4j.Slf4j;
 
 /**
  * 纯 Java 多链转账：ETH/BSC（原生+USDT）、TRON（TRX+USDT）、BTC、SOL（原生+USDT）。
- * 对齐 Python chain_transfer。归集入口仍只放行 eth/bsc/tron/btc。
+ * 对齐 Python chain_transfer。归集入口放行 eth/bsc/tron/btc/sol。
  */
 @Slf4j
 @Service
@@ -43,15 +41,16 @@ public class ChainTransferService {
     private static final String ETH_USDT = "0xdAC17F958D2ee523a2206206994597C13D831ec7";
     private static final String BSC_USDT = "0x55d398326f99059fF775485246999027B3197955";
     private static final String TRON_USDT = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t";
-    private static final String TRON_API = "https://api.trongrid.io";
 
     private final RestTemplate http;
+    private final TronGridClient tron;
 
-    public ChainTransferService() {
+    public ChainTransferService(TronGridClient tron) {
         SimpleClientHttpRequestFactory f = new SimpleClientHttpRequestFactory();
         f.setConnectTimeout(15000);
         f.setReadTimeout(45000);
         this.http = new RestTemplate(f);
+        this.tron = tron;
     }
 
     public Map<String, Object> transfer(String chain, String privateKeyHex, String toAddress,
@@ -139,7 +138,9 @@ public class ChainTransferService {
                 send = toWei(new BigDecimal(amount.trim()));
             }
             if (send.compareTo(BigInteger.ZERO) <= 0) {
-                return fail("可转余额不足（需预留 gas）");
+                String unit = "bsc".equals(chain) ? "BNB" : "ETH";
+                String need = "bsc".equals(chain) ? "约 0.001 BNB" : "约 0.0008 ETH";
+                return fail(unit + " 可转余额不足（需预留 " + need + " + gas），当前余额不足以发起归集");
             }
             if (send.add(fee).compareTo(balance) > 0) {
                 return fail("余额不足以支付金额+gas");
@@ -220,8 +221,15 @@ public class ChainTransferService {
             if (from.isEmpty() || to == null || to.isBlank()) {
                 return fail("TRON 地址无效");
             }
-            JSONObject acc = getJson(TRON_API + "/v1/accounts/" + from);
+            JSONObject acc = tron.getAccounts(from);
             JSONArray data = acc == null ? null : acc.getJSONArray("data");
+            if (data == null || data.isEmpty()) {
+                JSONObject ga = new JSONObject();
+                ga.put("address", from);
+                ga.put("visible", true);
+                acc = accountFromGetAccount(tron.postWallet("/wallet/getaccount", ga));
+                data = acc == null ? null : acc.getJSONArray("data");
+            }
             long balance = 0;
             if (data != null && !data.isEmpty()) {
                 balance = data.getJSONObject(0).getLongValue("balance");
@@ -237,21 +245,16 @@ public class ChainTransferService {
                 return fail("可转 TRX 不足（需预留手续费）");
             }
             JSONObject body = new JSONObject();
-            body.put("owner_address", from);
-            body.put("to_address", to.trim());
+            body.put("owner_address", TronGridClient.toHex41(from));
+            body.put("to_address", TronGridClient.toHex41(to.trim()));
             body.put("amount", sendSun);
-            body.put("visible", true);
-            JSONObject created = postJson(TRON_API + "/wallet/createtransaction", body);
+            body.put("visible", false);
+            JSONObject created = tron.postWallet("/wallet/createtransaction", body);
             if (created == null || created.getString("txID") == null) {
                 return fail("创建 TRX 交易失败", created);
             }
-            JSONObject signed = signTronTx(created, priv);
-            JSONObject broadcast = postJson(TRON_API + "/wallet/broadcasttransaction", signed);
-            String txid = signed.getString("txID");
-            if (broadcast != null && Boolean.TRUE.equals(broadcast.getBoolean("result"))) {
-                return ok("tron", "TRX", txid, from, to.trim(), fromWei(BigInteger.valueOf(sendSun), 6));
-            }
-            return fail(broadcast == null ? "广播失败" : String.valueOf(broadcast.get("message")), broadcast);
+            JSONObject signed = signTronTx(created, priv, from);
+            return finishTronBroadcast(signed, "TRX", from, to.trim(), fromWei(BigInteger.valueOf(sendSun), 6));
         } catch (Exception e) {
             return fail(e.getMessage());
         }
@@ -269,9 +272,9 @@ public class ChainTransferService {
             balReq.put("owner_address", from);
             balReq.put("contract_address", TRON_USDT);
             balReq.put("function_selector", "balanceOf(address)");
-            balReq.put("parameter", padAddressParam(from));
+            balReq.put("parameter", TronGridClient.abiAddressParam(from));
             balReq.put("visible", true);
-            JSONObject balResp = postJson(TRON_API + "/wallet/triggerconstantcontract", balReq);
+            JSONObject balResp = tron.postWallet("/wallet/triggerconstantcontract", balReq);
             long balance = 0;
             if (balResp != null) {
                 JSONArray arr = balResp.getJSONArray("constant_result");
@@ -291,119 +294,287 @@ public class ChainTransferService {
             if (sendRaw > balance) {
                 return fail("USDT 余额不足");
             }
-            String parameter = padAddressParam(to.trim()) + String.format("%064x", sendRaw);
+            String energyErr = usdtFeeBlockReason(from);
+            if (energyErr != null) {
+                return fail(energyErr);
+            }
+            String parameter = TronGridClient.abiAddressParam(to.trim()) + String.format("%064x", sendRaw);
             JSONObject trig = new JSONObject();
-            trig.put("owner_address", from);
-            trig.put("contract_address", TRON_USDT);
+            trig.put("owner_address", TronGridClient.toHex41(from));
+            trig.put("contract_address", TronGridClient.toHex41(TRON_USDT));
             trig.put("function_selector", "transfer(address,uint256)");
             trig.put("parameter", parameter);
             trig.put("fee_limit", 30_000_000);
             trig.put("call_value", 0);
-            trig.put("visible", true);
-            JSONObject created = postJson(TRON_API + "/wallet/triggersmartcontract", trig);
+            trig.put("visible", false);
+            JSONObject created = tron.postWallet("/wallet/triggersmartcontract", trig);
             if (created == null || created.getJSONObject("transaction") == null) {
                 return fail("创建 USDT 交易失败", created);
             }
             JSONObject tx = created.getJSONObject("transaction");
-            JSONObject signed = signTronTx(tx, priv);
-            JSONObject broadcast = postJson(TRON_API + "/wallet/broadcasttransaction", signed);
-            String txid = signed.getString("txID");
-            if (broadcast != null && Boolean.TRUE.equals(broadcast.getBoolean("result"))) {
-                return ok("tron", "USDT", txid, from, to.trim(), fromWei(BigInteger.valueOf(sendRaw), 6));
-            }
-            String msg = broadcast == null ? "广播失败" : String.valueOf(broadcast.getOrDefault("message", broadcast));
-            if (msg.toLowerCase(Locale.ROOT).contains("resource") || msg.toLowerCase(Locale.ROOT).contains("bandwidth")) {
-                msg = msg + "；TRON 带宽/能量不足，请先向该地址转入少量 TRX";
-            }
-            return fail(msg, broadcast);
+            JSONObject signed = signTronTx(tx, priv, from);
+            return finishTronBroadcast(signed, "USDT", from, to.trim(), fromWei(BigInteger.valueOf(sendRaw), 6));
         } catch (Exception e) {
             return fail(e.getMessage());
         }
     }
 
-    private JSONObject signTronTx(JSONObject tx, byte[] priv) throws Exception {
+    /**
+     * 对齐 tronpy：签 sha256(raw_data)，recovery 必须还原到转出地址。
+     * 签名写回节点返回的整笔交易。广播优先走 broadcasthex，避免丢掉 raw_data 触发节点空指针，
+     * 也不让节点按 JSON 把 raw_data 重编码后再验签。
+     */
+    private JSONObject signTronTx(JSONObject tx, byte[] priv, String fromAddr) throws Exception {
         String rawDataHex = tx.getString("raw_data_hex");
         if (rawDataHex == null || rawDataHex.isBlank()) {
             throw new IllegalStateException("缺少 raw_data_hex");
         }
-        byte[] raw = Numeric.hexStringToByteArray(rawDataHex);
-        byte[] hash = sha256(raw);
-        // secp256k1 sign
-        org.bouncycastle.crypto.signers.ECDSASigner signer = new org.bouncycastle.crypto.signers.ECDSASigner();
-        org.bouncycastle.crypto.params.ECPrivateKeyParameters key =
-                new org.bouncycastle.crypto.params.ECPrivateKeyParameters(
-                        new BigInteger(1, priv),
-                        new org.bouncycastle.crypto.params.ECDomainParameters(
-                                org.bouncycastle.asn1.sec.SECNamedCurves.getByName("secp256k1").getCurve(),
-                                org.bouncycastle.asn1.sec.SECNamedCurves.getByName("secp256k1").getG(),
-                                org.bouncycastle.asn1.sec.SECNamedCurves.getByName("secp256k1").getN()));
-        signer.init(true, key);
-        BigInteger[] sig = signer.generateSignature(hash);
-        BigInteger r = sig[0];
-        BigInteger s = sig[1];
-        // low-s
-        BigInteger half = key.getParameters().getN().shiftRight(1);
-        if (s.compareTo(half) > 0) {
-            s = key.getParameters().getN().subtract(s);
+        byte[] hash = sha256(Numeric.hexStringToByteArray(rawDataHex));
+        String txid = tx.getString("txID");
+        if (txid != null && !txid.isBlank()
+                && !txid.equalsIgnoreCase(Numeric.toHexStringNoPrefix(hash))) {
+            throw new IllegalStateException("交易 txID 与 raw_data 不一致，已中止");
         }
-        byte[] sigBytes = new byte[65];
-        System.arraycopy(Numeric.toBytesPadded(r, 32), 0, sigBytes, 0, 32);
-        System.arraycopy(Numeric.toBytesPadded(s, 32), 0, sigBytes, 32, 32);
-        // recovery id: try 0..3
-        byte recId = 0;
-        for (int i = 0; i < 4; i++) {
-            // Tron uses v = 27 + recId typically in signature[64]
-            recId = (byte) i;
-            sigBytes[64] = recId;
-            break;
+        Credentials cred = Credentials.create(Numeric.toHexStringNoPrefix(priv));
+        org.web3j.crypto.Sign.SignatureData sd =
+                org.web3j.crypto.Sign.signMessage(hash, cred.getEcKeyPair(), false);
+        byte[] r = pad32(sd.getR());
+        byte[] s = pad32(sd.getS());
+        int rec = sd.getV()[0] & 0xFF;
+        if (rec >= 27) {
+            rec -= 27;
         }
-        // Prefer recovery that matches pubkey — simplify: use 0
-        sigBytes[64] = 0x1b; // common tronpy style sometimes differs; try both via broadcast
-        // Actually Tron expects signature as 65 bytes with recovery 0/1 without +27 in some APIs
-        // Use web3j Sign for proper recovery
-        org.web3j.crypto.Sign.SignatureData sd = org.web3j.crypto.Sign.signMessage(hash, Credentials.create(Numeric.toHexStringNoPrefix(priv)).getEcKeyPair(), false);
+        java.math.BigInteger expectPub = cred.getEcKeyPair().getPublicKey();
+        if (!recoversTo(hash, r, s, rec, expectPub)) {
+            int flipped = rec ^ 1;
+            if (!recoversTo(hash, r, s, flipped, expectPub)) {
+                throw new IllegalStateException("TRON 签名与转出地址不一致，已中止广播");
+            }
+            rec = flipped;
+        }
         byte[] out = new byte[65];
-        System.arraycopy(sd.getR(), 0, out, 0, 32);
-        System.arraycopy(sd.getS(), 0, out, 32, 32);
-        out[64] = sd.getV()[0];
+        System.arraycopy(r, 0, out, 0, 32);
+        System.arraycopy(s, 0, out, 32, 32);
+        out[64] = (byte) rec;
         JSONArray sigs = new JSONArray();
         sigs.add(Numeric.toHexStringNoPrefix(out));
         tx.put("signature", sigs);
+        if (fromAddr != null && !fromAddr.isBlank()
+                && !fromAddr.equals(WalletAddressUtil.tronFromPrivPublic(priv))) {
+            throw new IllegalStateException("私钥与转出地址不一致，已中止广播");
+        }
         return tx;
     }
 
-    private static String padAddressParam(String base58OrHex) {
-        // For Tron visible API, parameter uses hex address without 41 prefix padded to 32 bytes
-        String hex;
-        if (base58OrHex.startsWith("T")) {
-            hex = tronBase58ToHex41(base58OrHex);
-            if (hex.startsWith("41")) {
-                hex = hex.substring(2);
-            }
-        } else {
-            hex = Numeric.cleanHexPrefix(base58OrHex);
-            if (hex.startsWith("41") && hex.length() == 42) {
-                hex = hex.substring(2);
-            }
+    private Map<String, Object> finishTronBroadcast(JSONObject signed, String coin, String from, String to, String amount) {
+        String txid = signed.getString("txID");
+        // 只传 raw_data_hex 时，节点 packTransaction 读 raw_data 会空指针。
+        // broadcasthex 直接解析 protobuf，签名仍对着原始 raw_data 字节，不会按 JSON 重编码。
+        JSONObject broadcast = tron.postWallet("/wallet/broadcasthex", tronBroadcastHexBody(signed));
+        if (broadcast == null || broadcast.getString("Error") != null) {
+            broadcast = tron.postWallet("/wallet/broadcasttransaction", signed);
         }
-        while (hex.length() < 64) {
-            hex = "0" + hex;
+        if (!tronBroadcastOk(broadcast)) {
+            return fail(tronBroadcastError(broadcast), broadcast);
         }
-        return hex;
+        // 节点收下交易 ≠ 合约执行成功；TRC20 常因能量不足上链后仍失败，手续费已扣、USDT 不动
+        String ret = waitTronContractRet(txid);
+        if ("SUCCESS".equalsIgnoreCase(ret)) {
+            return ok("tron", coin, txid, from, to, amount);
+        }
+        if (ret == null || ret.isBlank()) {
+            return fail("交易已广播上链，但暂未查到执行结果（" + txid + "）。请先在区块浏览器核对，不要马上再次归集");
+        }
+        String upper = ret.toUpperCase(Locale.ROOT);
+        if (upper.contains("ENERGY") || upper.contains("BANDWIDTH") || upper.contains("RESOURCE")) {
+            return fail("交易已上链但执行失败（" + ret + "），" + coin + " 未转出；能量/带宽不足，手续费可能已扣除。txid=" + txid);
+        }
+        return fail("交易已上链但执行失败（" + ret + "），" + coin + " 未转出。txid=" + txid);
     }
 
-    private static String tronBase58ToHex41(String addr) {
+    /** 能量不够且 TRX 也覆盖不了手续费时，不要广播，避免只扣 TRX、USDT 不动还提示成功。 */
+    private String usdtFeeBlockReason(String from) {
         try {
-            byte[] decoded = BIP32Util.base58Decode(addr);
-            if (decoded.length < 21) {
-                return "";
+            JSONObject req = new JSONObject();
+            req.put("address", TronGridClient.toHex41(from));
+            req.put("visible", false);
+            JSONObject res = tron.postWallet("/wallet/getaccountresource", req);
+            long energyLimit = res == null ? 0 : res.getLongValue("EnergyLimit");
+            long energyUsed = res == null ? 0 : res.getLongValue("EnergyUsed");
+            long energy = Math.max(0, energyLimit - energyUsed);
+            JSONObject accReq = new JSONObject();
+            accReq.put("address", TronGridClient.toHex41(from));
+            accReq.put("visible", false);
+            JSONObject acc = tron.postWallet("/wallet/getaccount", accReq);
+            long sun = acc == null ? 0 : acc.getLongValue("balance");
+            if (energy < 30000 && sun < 5_000_000L) {
+                return "能量和 TRX 都不足以支付 USDT 手续费（约需能量或至少数个 TRX）。为避免只扣手续费却转不出 USDT，已中止";
             }
-            // version(1)+hash20+checksum4 → take first 21
-            byte[] payload = Arrays.copyOfRange(decoded, 0, 21);
-            return Numeric.toHexStringNoPrefix(payload);
-        } catch (Exception e) {
+        } catch (Exception ignored) {
+        }
+        return null;
+    }
+
+    private String waitTronContractRet(String txid) {
+        if (txid == null || txid.isBlank()) {
             return "";
         }
+        for (int i = 0; i < 10; i++) {
+            try {
+                // gettransactioninfobyid：失败时 receipt.result=OUT_OF_ENERGY；成功时常无 result 字段
+                JSONObject infoReq = new JSONObject();
+                infoReq.put("value", txid);
+                JSONObject info = tron.postWallet("/wallet/gettransactioninfobyid", infoReq);
+                long blockNumber = info == null ? 0 : info.getLongValue("blockNumber");
+                if (info != null && !info.isEmpty()) {
+                    JSONObject receipt = info.getJSONObject("receipt");
+                    if (receipt != null) {
+                        String result = receipt.getString("result");
+                        if (result != null && !result.isBlank() && !"SUCCESS".equalsIgnoreCase(result)) {
+                            return result;
+                        }
+                    }
+                }
+                JSONObject txReq = new JSONObject();
+                txReq.put("value", txid);
+                JSONObject tx = tron.postWallet("/wallet/gettransactionbyid", txReq);
+                if (tx != null) {
+                    JSONArray ret = tx.getJSONArray("ret");
+                    if (ret != null && !ret.isEmpty()) {
+                        String contractRet = ret.getJSONObject(0).getString("contractRet");
+                        if (contractRet != null && !contractRet.isBlank()) {
+                            return contractRet;
+                        }
+                    }
+                }
+                if (blockNumber > 0) {
+                    // 已进块且未标失败 → 视为成功
+                    return "SUCCESS";
+                }
+                Thread.sleep(1500L);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return "";
+            } catch (Exception ignored) {
+            }
+        }
+        return "";
+    }
+
+    private static boolean recoversTo(byte[] hash, byte[] r, byte[] s, int recId, java.math.BigInteger expectPub) {
+        try {
+            int v = recId >= 27 ? recId : recId + 27;
+            org.web3j.crypto.Sign.SignatureData data =
+                    new org.web3j.crypto.Sign.SignatureData((byte) v, r, s);
+            java.math.BigInteger pub = org.web3j.crypto.Sign.signedMessageHashToKey(hash, data);
+            return pub != null && pub.equals(expectPub);
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private static byte[] pad32(byte[] src) {
+        if (src == null) {
+            return new byte[32];
+        }
+        if (src.length == 32) {
+            return src;
+        }
+        byte[] out = new byte[32];
+        if (src.length > 32) {
+            System.arraycopy(src, src.length - 32, out, 0, 32);
+            return out;
+        }
+        System.arraycopy(src, 0, out, 32 - src.length, src.length);
+        return out;
+    }
+
+    private static JSONObject accountFromGetAccount(JSONObject got) {
+        if (got == null) {
+            return null;
+        }
+        JSONObject row = new JSONObject();
+        row.put("balance", got.getLongValue("balance"));
+        JSONObject wrapped = new JSONObject();
+        JSONArray data = new JSONArray();
+        data.add(row);
+        wrapped.put("data", data);
+        return wrapped;
+    }
+
+    /** 把 raw_data 与签名装成 Transaction protobuf，交给 /wallet/broadcasthex。 */
+    private static JSONObject tronBroadcastHexBody(JSONObject signed) {
+        JSONArray sigs = signed.getJSONArray("signature");
+        String sig = sigs == null || sigs.isEmpty() ? "" : sigs.getString(0);
+        String rawHex = signed.getString("raw_data_hex");
+        if (rawHex == null || rawHex.isBlank() || sig == null || sig.isBlank()) {
+            return new JSONObject();
+        }
+        byte[] raw = Numeric.hexStringToByteArray(rawHex);
+        byte[] signature = Numeric.hexStringToByteArray(sig);
+        byte[] lenRaw = protoVarint(raw.length);
+        byte[] lenSig = protoVarint(signature.length);
+        byte[] tx = new byte[1 + lenRaw.length + raw.length + 1 + lenSig.length + signature.length];
+        int o = 0;
+        tx[o++] = 0x0a;
+        System.arraycopy(lenRaw, 0, tx, o, lenRaw.length);
+        o += lenRaw.length;
+        System.arraycopy(raw, 0, tx, o, raw.length);
+        o += raw.length;
+        tx[o++] = 0x12;
+        System.arraycopy(lenSig, 0, tx, o, lenSig.length);
+        o += lenSig.length;
+        System.arraycopy(signature, 0, tx, o, signature.length);
+        JSONObject body = new JSONObject();
+        body.put("transaction", Numeric.toHexStringNoPrefix(tx));
+        return body;
+    }
+
+    private static byte[] protoVarint(int value) {
+        java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream(4);
+        int v = value;
+        while ((v & ~0x7f) != 0) {
+            out.write((v & 0x7f) | 0x80);
+            v >>>= 7;
+        }
+        out.write(v);
+        return out.toByteArray();
+    }
+
+    private static boolean tronBroadcastOk(JSONObject broadcast) {
+        if (broadcast == null || broadcast.getString("Error") != null) {
+            return false;
+        }
+        if (!Boolean.TRUE.equals(broadcast.getBoolean("result"))) {
+            return false;
+        }
+        String code = broadcast.getString("code");
+        return code == null || code.isBlank() || "SUCCESS".equalsIgnoreCase(code);
+    }
+
+    private static String tronBroadcastError(JSONObject broadcast) {
+        if (broadcast == null) {
+            return "广播失败";
+        }
+        Object msg = broadcast.get("message");
+        if (msg == null) {
+            msg = broadcast.get("code");
+        }
+        if (msg == null) {
+            return String.valueOf(broadcast);
+        }
+        String text = String.valueOf(msg);
+        // TronGrid 有时把错误写成 hex
+        if (text.matches("(?i)^[0-9a-f]+$") && text.length() >= 8 && text.length() % 2 == 0) {
+            try {
+                String decoded = new String(Numeric.hexStringToByteArray(text), StandardCharsets.UTF_8).trim();
+                if (!decoded.isEmpty()) {
+                    return decoded;
+                }
+            } catch (Exception ignored) {
+            }
+        }
+        return text;
     }
 
     private static byte[] sha256(byte[] data) throws Exception {
@@ -428,22 +599,6 @@ public class ChainTransferService {
         }
         Object result = resp.get("result");
         return result == null ? "0x0" : String.valueOf(result);
-    }
-
-    private JSONObject getJson(String url) {
-        try {
-            String raw = http.getForObject(url, String.class);
-            return JSON.parseObject(raw);
-        } catch (Exception e) {
-            return null;
-        }
-    }
-
-    private JSONObject postJson(String url, JSONObject body) {
-        HttpHeaders h = new HttpHeaders();
-        h.setContentType(MediaType.APPLICATION_JSON);
-        String raw = http.postForObject(url, new HttpEntity<>(body.toJSONString(), h), String.class);
-        return JSON.parseObject(raw);
     }
 
     private static String rpcOf(String chain) {
@@ -528,10 +683,56 @@ public class ChainTransferService {
     private static Map<String, Object> fail(String error, Object response) {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("ok", false);
-        m.put("error", error == null || error.isBlank() ? "transfer failed" : error.trim());
+        m.put("error", humanizeChainError(error));
         if (response != null) {
             m.put("response", response);
         }
         return m;
+    }
+
+    /** 将节点/HTTP 原始错误收成运营可读提示，避免把 JSON、<EOL> 等直接甩到弹窗。 */
+    static String humanizeChainError(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return "链上转账失败";
+        }
+        String t = raw.trim()
+                .replace("<EOL>", " ")
+                .replace("\\/", "/")
+                .replaceAll("\\s+", " ");
+        String lower = t.toLowerCase(Locale.ROOT);
+        if (lower.contains("429") || lower.contains("too many requests")
+                || lower.contains("rate exceeded") || lower.contains("allowed_rps")
+                || lower.contains("request rate")) {
+            return "链上节点请求过于频繁，请稍候几秒后再试归集";
+        }
+        if (lower.contains("401") || lower.contains("403") || lower.contains("api key")
+                || lower.contains("apikey")) {
+            return "链上节点鉴权失败，请检查 API Key 或稍后重试";
+        }
+        if (lower.contains("timeout") || lower.contains("timed out") || lower.contains("connect timed")) {
+            return "链上节点超时，请稍后重试";
+        }
+        if (lower.contains("insufficient energy") || lower.contains("out of energy")
+                || lower.contains("bandwidth") || lower.contains("out_of_energy")) {
+            return "TRX 能量/带宽不足，USDT 未转出";
+        }
+        if (lower.contains("validate signature") || lower.contains("not contained of permission")) {
+            return "签名与转出地址不一致，交易未上链";
+        }
+        if (lower.contains("insufficient") && (lower.contains("balance") || lower.contains("funds"))) {
+            return "余额不足以支付转账金额或手续费";
+        }
+        if (lower.contains("nonce too low")) {
+            return "交易 nonce 冲突，请稍后重试";
+        }
+        // 仍像英文/JSON/HTTP 原文时，给短提示并截断细节
+        boolean looksRaw = t.startsWith("{") || t.startsWith("\"") || t.contains("\"Error\"")
+                || lower.startsWith("http") || lower.matches("(?s)^\\d{3}\\s+.*")
+                || (t.length() > 80 && t.chars().filter(c -> c == '{' || c == '"' || c == '\\').count() > 3);
+        if (looksRaw) {
+            String shortMsg = t.length() > 120 ? t.substring(0, 120) + "…" : t;
+            return "链上转账失败：" + shortMsg;
+        }
+        return t.length() > 200 ? t.substring(0, 200) + "…" : t;
     }
 }

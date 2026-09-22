@@ -128,13 +128,15 @@ public final class Coin98Mmkv {
             } catch (Exception ignored) {
             }
             Object[] opened = decryptWithCandidates(enc, crc, candidates);
-            if (opened == null) {
+            Map<String, byte[]> openedMap = opened == null ? null : parseMmkvMap((byte[]) opened[0]);
+            // 随机密钥也能拆出几个键。没有钱包相关键就不算打开，避免落到「密码错误」。
+            if (openedMap == null || mmkvMapQuality(openedMap) < 10) {
                 if (authKey == null) {
-                    return fail("MMKV 已加密，需同设备 Keychain（coin98_auth_mmkv_key）");
+                    return fail("MMKV 已加密，缺少同设备 Keychain（coin98_auth_mmkv_key），尚未校验钱包密码");
                 }
-                return fail("MMKV 解密失败（Keychain 密钥与 Documents 可能不匹配）");
+                return fail("MMKV 解密失败（Keychain 密钥与 Documents 可能不匹配），尚未校验钱包密码");
             }
-            mmkvMap = parseMmkvMap((byte[]) opened[0]);
+            mmkvMap = openedMap;
         }
         if (mmkvMap == null || mmkvMap.isEmpty()) {
             return fail("未找到 mmkv.default / mmkv.default.enc");
@@ -153,7 +155,10 @@ public final class Coin98Mmkv {
                 }
             }
         }
-        return fail("密码错误");
+        if (authKey == null && enc != null && enc.length > 0 && mmkvMapQuality(mmkvMap) < 10) {
+            return fail("MMKV 已加密，缺少同设备 Keychain（coin98_auth_mmkv_key），尚未校验钱包密码");
+        }
+        return fail("已打开 MMKV，但没有解出助记词");
     }
 
     public static byte[] mmkvIvFromCrc(byte[] crcBytes) {
@@ -188,7 +193,7 @@ public final class Coin98Mmkv {
             throw new IllegalArgumentException("MMKV enc 文件过短");
         }
         byte[] aesKey = normalizeAesKey(key, aes256);
-        Cipher c = Cipher.getInstance("AES/CFB/NoPadding");
+        Cipher c = Cipher.getInstance("AES/CFB128/NoPadding");
         c.init(Cipher.DECRYPT_MODE, new SecretKeySpec(aesKey, "AES"), new IvParameterSpec(iv));
         byte[] body = c.doFinal(Arrays.copyOfRange(enc, 4, enc.length));
         byte[] out = new byte[4 + body.length];
@@ -219,7 +224,7 @@ public final class Coin98Mmkv {
                 }
             }
         }
-        return bestQ > 0 ? best : null;
+        return bestQ >= 10 ? best : null;
     }
 
     public static Map<String, byte[]> parseMmkvMap(byte[] raw) {
@@ -240,7 +245,8 @@ public final class Coin98Mmkv {
                 break;
             }
             long valLen = decodeUnsignedVarint(f);
-            if (valLen < 0) {
+            // 错密钥解出来的是乱码，varint 可能声称要读几百兆。超过剩余字节就停，避免堆溢出。
+            if (valLen < 0 || valLen > f.available()) {
                 break;
             }
             if (valLen == 0) {
@@ -295,21 +301,22 @@ public final class Coin98Mmkv {
     private static long decodeUnsignedVarint(ByteArrayInputStream buf) {
         int shift = 0;
         long result = 0;
-        while (true) {
+        for (int i = 0; i < 5; i++) {
             int b = buf.read();
             if (b < 0) {
                 return -1;
             }
             result |= (long) (b & 0x7f) << shift;
-            shift += 7;
             if ((b & 0x80) == 0) {
                 return result & 0xffffffffL;
             }
+            shift += 7;
         }
+        return -1;
     }
 
     private static byte[] readExact(ByteArrayInputStream in, int n) {
-        if (n < 0) {
+        if (n < 0 || n > in.available()) {
             return null;
         }
         byte[] out = new byte[n];

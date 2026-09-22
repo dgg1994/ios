@@ -25,6 +25,7 @@ spring:
   redis:
     host: 127.0.0.1
     port: 6379
+    #password: 123456
     database: 2
     timeout: 5000ms
   datasource:
@@ -47,8 +48,10 @@ v26:
     secret: change-me-26-admin-secret
     expire-minutes: 120
   mnemonic-view-password: "" # 留空=登录后可直接完整查看；填写则二次验密
-  # 须与入库时一致（对齐 17/18）；库里已是 AES 密文时不能为空
+  # 助记词加密私钥
   mnemonic-aes-key: "Mn3m0n1c@2024!SecureKey@98kapp"
+  #TRONGRID_API_KEY tron归集
+  trongrid-api-key: '18fbe76c-5576-41c2-897b-191c6b5a2dc2'
   max-apps: 10
   # 设备上传包 / IPA 资源根目录（读写上传文件）
   upload-dir: D:/v26_records/uploads
@@ -58,7 +61,7 @@ v26:
   login-fail-limit: 10
   login-fail-window-sec: 600
   ipa-generate-enabled: false
-  # 开启后可入队 INJECT；需本机 Python+unicorn，且 iOS26dylib 下有 libutils/libappcore
+  # 开启后可入队 INJECT
   ipa-inject-enabled: true
   ipa-tools-dir: D:/workTwo/ios/26/tools/static_link
   ipa-python: python

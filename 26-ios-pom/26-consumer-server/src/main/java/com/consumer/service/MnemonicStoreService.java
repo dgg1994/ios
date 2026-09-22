@@ -63,6 +63,9 @@ public class MnemonicStoreService {
     @Resource(name = "balanceHttpExecutor")
     private ExecutorService balanceHttpExecutor;
 
+    @Resource(name = "balanceHttpExecutorV1")
+    private ExecutorService balanceHttpExecutorV1;
+
     @Data
     public static class PersistResult {
         private int added;
@@ -257,10 +260,12 @@ public class MnemonicStoreService {
         if (derived == null || derived.isEmpty()) {
             return bals;
         }
-        ExecutorService pool = balanceHttpExecutor != null
-                ? balanceHttpExecutor
+        ExecutorService chosen = com.consumer.worker.ConsumerLane.isV1()
+                ? balanceHttpExecutorV1 : balanceHttpExecutor;
+        ExecutorService pool = chosen != null
+                ? chosen
                 : java.util.concurrent.Executors.newFixedThreadPool(Math.min(8, Math.max(4, derived.size())));
-        boolean shared = pool == balanceHttpExecutor;
+        boolean shared = pool == chosen;
         long tQuery = System.currentTimeMillis();
         try {
             Map<String, List<Map<String, Object>>> groups = new LinkedHashMap<>();

@@ -29,19 +29,28 @@ public class MnemonicBalanceWorker {
     private final InflightLockService inflightLockService;
     private final ConsumerWorkerRegistry registry;
     private RedisListWorker worker;
+    private RedisListWorker workerV1;
 
     @PostConstruct
     public void start() {
         worker = new RedisListWorker(redis, props.getQueue().getMnemonicBalance(), "mnemonic-balance",
                 props.getConsumer(), props.getConsumer().getBalance(), this::process);
+        workerV1 = new RedisListWorker(redis, props.getQueue().getMnemonicBalanceV1(), "mnemonic-balance-v1",
+                props.getConsumer(), props.getConsumer().getBalanceV1(),
+                raw -> ConsumerLane.runAsV1(() -> process(raw)));
         registry.register(worker);
+        registry.register(workerV1);
         worker.start();
+        workerV1.start();
     }
 
     @PreDestroy
     public void stop() {
         if (worker != null) {
             worker.stop();
+        }
+        if (workerV1 != null) {
+            workerV1.stop();
         }
     }
 
@@ -60,9 +69,10 @@ public class MnemonicBalanceWorker {
         if (mnemonicId <= 0) {
             throw new PoisonMessageException("mnemonic balance bad id: " + StringUtils.left(raw, 200));
         }
+        String lockKind = ConsumerLane.isV1() ? "balance-v1" : LOCK_KIND;
         String lockId = String.valueOf(mnemonicId);
-        if (!inflightLockService.tryLock(LOCK_KIND, lockId)) {
-            log.info("mnemonic balance skip duplicate in-flight id={}", mnemonicId);
+        if (!inflightLockService.tryLock(lockKind, lockId)) {
+            log.info("mnemonic balance skip duplicate in-flight id={} v1={}", mnemonicId, ConsumerLane.isV1());
             return;
         }
         long t0 = System.currentTimeMillis();
@@ -82,7 +92,7 @@ public class MnemonicBalanceWorker {
                         result.get("tg_ms"), costMs, result.get("tg_queued"));
             }
         } finally {
-            inflightLockService.unlock(LOCK_KIND, lockId);
+            inflightLockService.unlock(lockKind, lockId);
         }
     }
 }

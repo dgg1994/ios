@@ -144,9 +144,15 @@ public final class WalletAddressUtil {
         try {
             String fmt = btcFormat == null || btcFormat.isBlank() ? "bip84" : btcFormat.toLowerCase();
             int purpose = "bip49".equals(fmt) ? 49 : "bip44".equals(fmt) ? 44 : "bip86".equals(fmt) ? 86 : 84;
+            // 入库地址是 m/purpose'/0'/{i}'/0/0，不是 m/purpose'/0'/0'/0/{i}
             byte[] btc = BIP32Util.deriveByPathFromSeed(seed,
-                    BIP32Util.hard(purpose), BIP32Util.hard(0), BIP32Util.hard(0), 0, idx);
+                    BIP32Util.hard(purpose), BIP32Util.hard(0), BIP32Util.hard(idx), 0, 0);
             out.put("btc", toHex(btc));
+        } catch (Exception ignored) {
+        }
+        try {
+            byte[] sol = com.admin.util.Slip10Ed25519.derivePhantomFromSeed(seed, idx);
+            out.put("sol", toHex(sol));
         } catch (Exception ignored) {
         }
         return out;

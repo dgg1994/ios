@@ -679,20 +679,53 @@
   margin-top: 10px;
 }
 
-.wallet-unlock input {
+.wallet-unlock-field {
+  position: relative;
   flex: 1;
+  min-width: 180px;
+}
+
+.wallet-unlock input {
+  width: 100%;
   min-width: 0;
   border: 1px solid rgba(20, 20, 22, 0.12);
   background: #ffffff;
   color: var(--ink);
-  padding: 8px 10px;
+  padding: 8px 36px 8px 10px;
   font-size: 13px;
   outline: none;
   border-radius: 8px;
 }
 
-.wallet-unlock button {
+.wallet-unlock-eye {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
   appearance: none;
+  border: 0;
+  background: transparent;
+  color: #a89f93;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  border-radius: 8px;
+  line-height: 0;
+}
+
+.wallet-unlock-eye:hover { background: rgba(26, 23, 20, 0.04); color: #1a1714; }
+.wallet-unlock-eye:disabled { opacity: 0.5; cursor: wait; }
+.wallet-unlock-eye svg { width: 16px; height: 16px; display: block; }
+
+.wallet-unlock button[type="submit"] {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   border: 1px solid rgba(20, 20, 22, 0.14);
   background: transparent;
   color: #3d3d42;
@@ -705,8 +738,21 @@
 }
 
 .wallet-unlock button:disabled {
-  opacity: 0.5;
+  opacity: 0.72;
   cursor: wait;
+}
+
+.wallet-unlock-spin {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 2px solid rgba(26, 23, 20, 0.25);
+  border-top-color: #1a1714;
+  animation: wallet-unlock-spin 0.7s linear infinite;
+}
+
+@keyframes wallet-unlock-spin {
+  to { transform: rotate(360deg); }
 }
 
 .wallet-actions {

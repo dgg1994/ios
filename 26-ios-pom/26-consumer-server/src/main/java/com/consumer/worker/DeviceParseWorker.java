@@ -70,6 +70,16 @@ public class DeviceParseWorker {
             log.info("device parse coalesced device={} (inflight)", deviceId);
             return;
         }
+        JSONObject metaObj = data.getJSONObject("meta");
+        String metaVer = metaObj == null ? null : metaObj.getString("interversion");
+        if ("v1".equalsIgnoreCase(StringUtils.trimToEmpty(metaVer))) {
+            Map<String, Object> moved = new LinkedHashMap<>();
+            moved.put("trigger", "moved_from_v2_queue");
+            moved.put("interversion", "v1");
+            parseQueueService.enqueueDeviceParseV1(deviceId, moved);
+            log.info("device parse moved to v1 queue device={}", deviceId);
+            return;
+        }
         long t0 = System.currentTimeMillis();
         try {
             Map<String, Object> result = autoParseService.autoParseV2(deviceId);

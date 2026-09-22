@@ -1,5 +1,6 @@
 import axios from "axios";
 import { adminUrl } from "../config";
+import { trackRequestEnd, trackRequestStart } from "../utils/pageLoad";
 
 const http = axios.create({
   baseURL: adminUrl("/api/admin"),
@@ -8,6 +9,7 @@ const http = axios.create({
 });
 
 http.interceptors.request.use((cfg) => {
+  cfg.pageLoadToken = trackRequestStart();
   const token = localStorage.getItem("admin_token");
   if (token) {
     cfg.headers.Authorization = `Bearer ${token}`;
@@ -16,8 +18,12 @@ http.interceptors.request.use((cfg) => {
 });
 
 http.interceptors.response.use(
-  (res) => res,
+  (res) => {
+    trackRequestEnd(res.config && res.config.pageLoadToken);
+    return res;
+  },
   (err) => {
+    trackRequestEnd(err.config && err.config.pageLoadToken);
     if (err.response && err.response.status === 401) {
       localStorage.removeItem("admin_token");
       if (!window.location.hash.startsWith("#/login")) {

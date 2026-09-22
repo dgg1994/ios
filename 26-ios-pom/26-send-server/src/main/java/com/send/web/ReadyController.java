@@ -26,7 +26,7 @@ public class ReadyController {
     @Autowired(required = false)
     private V26SendProperties props;
 
-    @GetMapping({"/", "/api/v2/system/ready"})
+    @GetMapping({"/", "/api/v1/system/ready", "/api/v2/system/ready"})
     public Map<String, Object> ready() {
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("service", "26-send-server");

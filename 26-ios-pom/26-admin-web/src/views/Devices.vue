@@ -1,5 +1,6 @@
 <template>
-  <div>
+  <div class="devices-page">
+    <div class="devices-page-head">
     <div class="devices-head">
       <h1>设备管理</h1>
       <div class="rule"></div>
@@ -40,6 +41,7 @@
       <button type="submit" class="btn-filter-search">查询</button>
       <button type="button" class="btn-filter-reset" @click="reset">重置</button>
     </form>
+    </div>
     <div class="devices-table-card">
       <div v-if="!items.length" class="devices-empty">暂无设备数据</div>
       <table v-else class="devices-table">
@@ -86,7 +88,7 @@
         </tbody>
       </table>
     </div>
-    <div class="vue-pager" v-if="total">
+    <div class="vue-pager devices-page-foot" v-if="total">
       <div>第 {{ page + 1 }} / {{ totalPages || 1 }} 页 · 共 {{ total }} 台</div>
       <div class="links">
         <button :disabled="page <= 0" @click="go(page - 1)">上一页</button>

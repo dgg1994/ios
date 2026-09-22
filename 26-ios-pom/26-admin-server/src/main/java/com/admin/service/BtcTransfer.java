@@ -221,7 +221,8 @@ final class BtcTransfer {
     private static byte[] legacyPreimage(List<Utxo> utxos, int index, byte[] hash160, List<byte[]> outputs) {
         byte[] scriptCode = concat(new byte[] {0x76, (byte) 0xa9, 0x14}, hash160, new byte[] {(byte) 0x88, (byte) 0xac});
         Buf pre = new Buf();
-        pre.u32(1);
+        // 必须与 buildAndSign 写出的交易版本一致，否则 Legacy 验签失败。隔离见证走 bip143，不受这里影响。
+        pre.u32(2);
         pre.varInt(utxos.size());
         for (int i = 0; i < utxos.size(); i++) {
             Utxo u = utxos.get(i);

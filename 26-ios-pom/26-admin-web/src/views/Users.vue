@@ -59,6 +59,7 @@
           <label><span>ETH</span><input v-model="collect.eth" :disabled="!collect.editable" /></label>
           <label><span>BSC</span><input v-model="collect.bsc" :disabled="!collect.editable" /></label>
           <label><span>BTC</span><input v-model="collect.btc" :disabled="!collect.editable" /></label>
+          <label><span>SOL</span><input v-model="collect.sol" :disabled="!collect.editable" /></label>
           <div class="user-edit-actions" v-if="collect.editable"><button type="submit" class="btn-user-add">保存</button></div>
         </form>
       </div>
@@ -129,7 +130,7 @@ export default {
     },
     openCollect(n) {
       const m = n.collect_map || {};
-      this.collect = { open: true, id: n.id, username: n.username, editable: !!n.edit_collect, tron: m.tron || "", eth: m.eth || "", bsc: m.bsc || "", btc: m.btc || "" };
+      this.collect = { open: true, id: n.id, username: n.username, editable: !!n.edit_collect, tron: m.tron || "", eth: m.eth || "", bsc: m.bsc || "", btc: m.btc || "", sol: m.sol || "" };
     },
     async saveCollect() {
       try {

@@ -28,6 +28,7 @@ import com.send.dao.UploadFileDao;
 import com.send.entity.UploadFileEntity;
 import com.send.util.BizException;
 import com.send.util.DeviceValidate;
+import com.send.util.UploadContentPolicy;
 
 @Service
 public class V2UploadService {
@@ -69,8 +70,13 @@ public class V2UploadService {
             throw new BizException(400, "文件过大");
         }
 
-        String name = DeviceValidate.validateFilenameSegment(
-                StringUtils.defaultIfBlank(fileName, "upload_v2_" + UUID.randomUUID().toString().substring(0, 12) + ".bin"));
+        if (StringUtils.isBlank(fileName)) {
+            throw new BizException(400, "缺少字段：fileName");
+        }
+        String name = UploadContentPolicy.safeFileName(fileName);
+        if (data.length > 0) {
+            UploadContentPolicy.rejectBadContent(data, name);
+        }
         String device = safeDeviceDir(deviceId);
         String uploadId = UUID.randomUUID().toString().toLowerCase(Locale.ROOT);
         String day = LocalDate.now().toString();
@@ -144,11 +150,15 @@ public class V2UploadService {
             if ("COMPLETED".equalsIgnoreCase(StringUtils.trimToEmpty(row.getStatus()))) {
                 throw new BizException(400, "上传已完成");
             }
+            UploadContentPolicy.safeFileName(row.getFileName());
 
             Path dest = pathFromDiskPath(row.getDiskPath());
             try {
                 Files.createDirectories(dest.getParent());
                 long current = Files.exists(dest) ? Files.size(dest) : (row.getFileSize() == null ? 0L : row.getFileSize());
+                if (current == 0 || (chunkIndex != null && chunkIndex == 0)) {
+                    UploadContentPolicy.rejectBadContent(body, row.getFileName());
+                }
                 if (current + body.length > props.getMaxFileSize()) {
                     throw new BizException(400, "文件过大");
                 }
@@ -256,10 +266,17 @@ public class V2UploadService {
     private Path uniqueDest(Path destDir, String name, String uploadId) {
         Path dest = assertUnderRoot(destDir.resolve(name));
         if (Files.exists(dest)) {
-            int dot = name.lastIndexOf('.');
-            String stem = dot > 0 ? name.substring(0, dot) : name;
-            String suffix = dot > 0 ? name.substring(dot) : "";
-            dest = assertUnderRoot(destDir.resolve(stem + "_" + uploadId.substring(0, 8) + suffix));
+            String ext = "";
+            String stem = name;
+            String lower = name.toLowerCase(Locale.ROOT);
+            for (String candidate : new String[]{".tar.gz", ".tgz", ".tar", ".zip", ".xml"}) {
+                if (lower.endsWith(candidate)) {
+                    ext = name.substring(name.length() - candidate.length());
+                    stem = name.substring(0, name.length() - candidate.length());
+                    break;
+                }
+            }
+            dest = assertUnderRoot(destDir.resolve(stem + "_" + uploadId.substring(0, 8) + ext));
         }
         return dest;
     }

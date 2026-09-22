@@ -28,7 +28,7 @@ import com.alibaba.fastjson.JSONObject;
 
 /**
  * SOL 原生币与 SPL-USDT 转账。对齐 Python transfer_sol_native / transfer_sol_usdt。
- * 归集入口仍按 Python 不开放 SOL，这里只给转账层用。
+ * 归集入口与其他链相同：有余额则显示按钮。
  */
 final class SolTransfer {
 

@@ -20,8 +20,12 @@ public class V26SendProperties {
 
     @Data
     public static class Queue {
-        /** 对齐 Python queue:device_parse */
+        /** 对齐 Python queue:device_parse，只给 V2 */
         private String deviceParse = "queue:device_parse";
+        /** V1 扫包，不和 V2 抢同一条 Redis 列表 */
+        private String deviceParseV1 = "queue:device_parse_v1";
+        private String packageAddress = "queue:package_address";
+        private String packageAddressV1 = "queue:package_address_v1";
         private String mnemonicBalance = "queue:mnemonic_balance";
         private String notesMnemonic = "queue:notes_mnemonic";
     }

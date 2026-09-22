@@ -129,14 +129,12 @@ public class ArchiveScanner {
 
     private String classifyRoot(String root) {
         String low = root.toLowerCase(Locale.ROOT);
-        if (low.contains("mobilenotes")) {
-            return "skip";
-        }
         String probe = root + ".tar";
         if (low.startsWith("appgroup.")) {
             probe = root.substring("appgroup.".length()) + ".tar";
         }
-        if (WalletMatcher.isNotesArchiveName(probe) || WalletMatcher.isNotesArchiveName(root + ".tar")) {
+        if (WalletMatcher.isNotesArchiveName(probe) || WalletMatcher.isNotesArchiveName(root + ".tar")
+                || low.contains("mobilenotes")) {
             return "notes";
         }
         String[] matched = WalletMatcher.matchWallet(probe);

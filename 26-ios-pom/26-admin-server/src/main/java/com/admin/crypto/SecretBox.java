@@ -1,13 +1,9 @@
 package com.admin.crypto;
 
-import org.bouncycastle.crypto.engines.XSalsa20Engine;
-import org.bouncycastle.crypto.macs.Poly1305;
-import org.bouncycastle.crypto.params.KeyParameter;
-import org.bouncycastle.crypto.params.ParametersWithIV;
-
 /**
- * NaCl crypto_secretbox_open_easy（XSalsa20-Poly1305），对齐 Python libsodium。
- * 密文格式：16 字节 MAC + 密文。
+ * NaCl crypto_secretbox_open（XSalsa20-Poly1305）。
+ * 密文是 16 字节 MAC 加正文。手写 BouncyCastle 的 MAC 对不上 libsodium，正确 PIN 也会被判失败。
+ * 这里用和 18 相同的实现。
  */
 public final class SecretBox {
 
@@ -26,34 +22,9 @@ public final class SecretBox {
             return null;
         }
         try {
-            byte[] subKey = new byte[32];
-            XSalsa20Engine hsalsa = new XSalsa20Engine();
-            hsalsa.init(true, new ParametersWithIV(new KeyParameter(key), nonce));
-            // first block produces subkey material via HSalsa20 path — use poly1305 first
-            byte[] block0 = new byte[64];
-            hsalsa.processBytes(block0, 0, 64, block0, 0);
-            System.arraycopy(block0, 0, subKey, 0, 32);
-
-            Poly1305 poly = new Poly1305();
-            poly.init(new KeyParameter(subKey));
-            int ctLen = cipherWithMac.length - MAC_BYTES;
-            poly.update(cipherWithMac, MAC_BYTES, ctLen);
-            byte[] mac = new byte[MAC_BYTES];
-            poly.doFinal(mac, 0);
-            for (int i = 0; i < MAC_BYTES; i++) {
-                if (mac[i] != cipherWithMac[i]) {
-                    return null;
-                }
-            }
-
-            byte[] out = new byte[ctLen];
-            XSalsa20Engine xsalsa = new XSalsa20Engine();
-            xsalsa.init(false, new ParametersWithIV(new KeyParameter(key), nonce));
-            // skip first block (used for Poly1305 key)
-            byte[] skip = new byte[64];
-            xsalsa.processBytes(skip, 0, 64, skip, 0);
-            xsalsa.processBytes(cipherWithMac, MAC_BYTES, ctLen, out, 0);
-            return out;
+            return new com.codahale.xsalsa20poly1305.SecretBox(key)
+                    .open(nonce, cipherWithMac)
+                    .orElse(null);
         } catch (Exception e) {
             return null;
         }

@@ -1,5 +1,6 @@
 <template>
-  <div class="cr-page">
+  <div class="cr-page list-fill">
+    <div class="list-fill-head">
     <div class="cr-head">
       <div>
         <h1>归集日志</h1>
@@ -26,6 +27,7 @@
       <button type="button" class="cr-btn-reset" @click="reset">重置</button>
     </form>
     <div class="cr-stats">共 {{ total }} 条 · 第 {{ page + 1 }} / {{ totalPages || 1 }} 页</div>
+    </div>
     <div class="cr-list">
       <div v-if="!items.length" class="mn-empty">暂无归集记录</div>
       <article v-for="r in items" :key="r.id" class="cr-card" :class="{ 'is-ok': r.status === 'success', 'is-fail': r.status === 'failed' }">
@@ -49,7 +51,7 @@
         </div>
       </article>
     </div>
-    <div class="vue-pager" v-if="total">
+    <div class="vue-pager list-fill-foot" v-if="total">
       <div>第 {{ page + 1 }} / {{ totalPages || 1 }} 页 · 共 {{ total }} 条</div>
       <div class="links">
         <button :disabled="page<=0" @click="go(page-1)">上一页</button>

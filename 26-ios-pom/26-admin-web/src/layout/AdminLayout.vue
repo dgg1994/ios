@@ -90,6 +90,12 @@
         <div class="admin-topbar-meta">N° {{ code }}</div>
       </header>
       <div class="admin-main-inner">
+        <div v-if="pageLoad.visible" class="page-loading" role="status" aria-live="polite">
+          <div class="page-loading-card">
+            <span class="page-loading-spin" aria-hidden="true"></span>
+            <span>加载中</span>
+          </div>
+        </div>
         <router-view />
       </div>
     </section>
@@ -112,6 +118,7 @@ import { useAuthStore } from "../stores/auth";
 import { api } from "../api/http";
 import { menuPath } from "../utils/ui";
 import NavIcon from "../components/NavIcon.vue";
+import { pageLoad } from "../utils/pageLoad";
 
 export default {
   components: { NavIcon },
@@ -152,7 +159,7 @@ export default {
         changelog.value = e.message || "加载失败";
       }
     });
-    return { auth, mainMenu, bottomMenu, version, title, code, showLog, changelog, menuPath, isActive, isOpen, toggle, onLogout };
+    return { auth, mainMenu, bottomMenu, version, title, code, showLog, changelog, pageLoad, menuPath, isActive, isOpen, toggle, onLogout };
   },
 };
 </script>

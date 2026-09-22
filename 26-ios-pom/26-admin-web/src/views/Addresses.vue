@@ -1,5 +1,6 @@
 <template>
-  <div>
+  <div class="list-fill">
+    <div class="list-fill-head">
     <div class="mn-head"><h1>全部地址</h1><div class="rule"></div></div>
     <p class="mn-sub">仅展示已解析的助记词派生地址，可一键归集到上级代理账户。
       <router-link to="/collect-records">查看归集日志 →</router-link>
@@ -28,6 +29,7 @@
       <button type="button" class="btn-filter-reset" @click="reset">重置</button>
     </form>
     <div class="mn-stats">共 {{ total }} 条 · 第 {{ page + 1 }} / {{ totalPages || 1 }} 页</div>
+    </div>
     <div class="mn-table-card">
       <div v-if="!items.length" class="mn-empty">暂无地址数据</div>
       <table v-else class="mn-table mn-table-addr">
@@ -107,37 +109,53 @@
         </tbody>
       </table>
     </div>
-    <div class="vue-pager" v-if="total">
+    <div class="vue-pager list-fill-foot" v-if="total">
       <div>第 {{ page + 1 }} / {{ totalPages || 1 }} 页 · 共 {{ total }} 条</div>
       <div class="links">
         <button :disabled="page<=0" @click="go(page-1)">上一页</button>
         <button :disabled="page+1>=totalPages" @click="go(page+1)">下一页</button>
       </div>
     </div>
-    <div v-if="collect.open" class="addr-collect-overlay is-open" @click.self="collect.open=false">
+    <div v-if="collect.open" class="addr-collect-overlay is-open" @click.self="closeCollect">
       <div class="addr-collect-dialog">
         <div class="addr-collect-head">
           <h2>一键归集</h2>
-          <button type="button" class="addr-collect-close" @click="collect.open=false">×</button>
+          <button type="button" class="addr-collect-close" @click="closeCollect">×</button>
         </div>
         <div class="addr-collect-body">
-          <div v-if="collect.loading">加载中…</div>
+          <div v-if="collect.loading && !collect.result">{{ collect.executing ? "正在广播交易，请稍候…" : "加载中…" }}</div>
           <template v-else>
-            <p class="addr-collect-msg">{{ collect.preview.message || collect.preview.error }}</p>
-            <div v-if="collect.preview.from_address" class="addr-collect-meta">
+            <p class="addr-collect-msg" :class="{ 'addr-collect-ok': collect.doneOk, 'addr-collect-warn': collect.resultError || !!collect.preview.error }">
+              {{ collectDoneTitle }}
+            </p>
+            <div v-if="collect.preview.from_address && !collect.doneOk" class="addr-collect-meta">
               <div>链：{{ collect.preview.chain_label || collect.preview.chain }}</div>
               <div>转出：<code>{{ collect.preview.from_address }}</code></div>
               <div>转入：<code>{{ collect.preview.to_address || "未设置" }}</code></div>
               <div>代理：{{ collect.preview.agent_display_name }}</div>
               <div>余额：{{ collect.preview.native_bal }} {{ collect.preview.native_symbol }} / USDT {{ collect.preview.usdt_bal }}</div>
             </div>
-            <p v-if="collect.preview.need_setup" class="addr-collect-warn">{{ collect.preview.error }}</p>
-            <pre v-if="collect.result" class="addr-collect-result" :class="{ 'is-err': collect.resultError }">{{ collect.result }}</pre>
+            <div v-if="collect.transferLines && collect.transferLines.length" class="addr-collect-result">
+              <div v-for="(line, i) in collect.transferLines" :key="i" :class="{ 'is-err': line.err }">{{ line.text }}</div>
+            </div>
+            <pre
+              v-else-if="collect.result && collect.result !== collectDoneTitle"
+              class="addr-collect-result"
+              :class="{ 'is-err': collect.resultError }"
+            >{{ collect.result }}</pre>
           </template>
         </div>
         <div class="addr-collect-actions">
-          <button type="button" class="btn-addr-collect-cancel" @click="collect.open=false">取消</button>
-          <button type="button" class="btn-addr-collect-ok" :disabled="!canExecute" @click="executeCollect">确认执行</button>
+          <button type="button" class="btn-addr-collect-cancel" @click="closeCollect">
+            {{ collectFinished ? "关闭" : "取消" }}
+          </button>
+          <button
+            v-if="!collectFinished"
+            type="button"
+            class="btn-addr-collect-ok"
+            :disabled="!canExecute"
+            @click="executeCollect"
+          >确认执行</button>
         </div>
       </div>
     </div>
@@ -155,14 +173,29 @@ export default {
       hierarchy: { agents: [], channels: [], sales: [] },
       chainOptions: [],
       busy: {},
-      collect: { open: false, loading: false, preview: {}, result: "", resultError: false, rowId: 0 },
+      collect: {
+        open: false, loading: false, executing: false, preview: {}, result: "", resultError: false,
+        doneOk: false, transferLines: [], rowId: 0,
+      },
     };
   },
   computed: {
     agents() { return this.hierarchy.agents || []; },
+    collectFinished() {
+      return !!(this.collect.doneOk || this.collect.resultError || this.collect.result
+        || (this.collect.preview && this.collect.preview.ok === false));
+    },
     canExecute() {
       const p = this.collect.preview || {};
-      return !this.collect.loading && p.ok && p.to_address && (p.coins || []).length && !this.collect.result;
+      return !this.collect.loading && !this.collect.executing && p.ok && p.to_address
+        && (p.coins || []).length && !this.collectFinished;
+    },
+    collectDoneTitle() {
+      if (this.collect.doneOk) return "归集完成";
+      if (this.collect.resultError || (this.collect.preview && this.collect.preview.ok === false)) {
+        return (this.collect.preview && this.collect.preview.error) || this.collect.result || "归集失败";
+      }
+      return (this.collect.preview && (this.collect.preview.message || this.collect.preview.error)) || "";
     },
   },
   watch: {
@@ -230,30 +263,110 @@ export default {
       finally { this.busy = { ...this.busy, [a.id]: false }; }
     },
     async openCollect(a) {
-      this.collect = { open: true, loading: true, preview: {}, result: "", resultError: false, rowId: a.id };
+      this.collect = {
+        open: true, loading: true, executing: false, preview: {}, result: "", resultError: false,
+        doneOk: false, transferLines: [], rowId: a.id,
+      };
       try {
         const body = await api.collectPreview(a.id);
-        this.collect.preview = body.data || {};
+        const p = body.data || {};
+        this.collect.preview = { ...p, message: p.ok === false ? "" : (p.message || "") };
+        if (p.ok === false) {
+          this.collect.resultError = true;
+          this.collect.result = p.error || p.message || "无法预览";
+          toast(this.collect.result, "err");
+        }
       } catch (e) {
-        this.collect.preview = { ok: false, error: e.message, need_setup: true };
+        const d = (e.body && e.body.data) || {};
+        const detail = d.error || d.message || e.message || "无法预览";
+        this.collect.preview = {
+          ok: false,
+          error: detail,
+          message: "",
+          need_setup: !!d.need_setup,
+          from_address: d.from_address,
+          to_address: d.to_address,
+          chain: d.chain,
+          chain_label: d.chain_label,
+          native_bal: d.native_bal,
+          usdt_bal: d.usdt_bal,
+          native_symbol: d.native_symbol,
+          agent_display_name: d.agent_display_name,
+          coins: d.coins || [],
+        };
+        this.collect.resultError = true;
+        this.collect.result = detail;
+        toast(detail, "err");
       } finally {
         this.collect.loading = false;
       }
     },
+    closeCollect() {
+      this.collect.open = false;
+    },
+    transferLinesFrom(data) {
+      const lines = [];
+      for (const t of (data && data.transfers) || []) {
+        if (t.ok) {
+          lines.push({ err: false, text: `${t.coin || ""} ${t.amount || ""} 成功${t.hash ? " · " + t.hash : ""}` });
+        } else {
+          lines.push({ err: true, text: `${t.coin || ""} 失败：${t.error || "未知错误"}` });
+        }
+      }
+      return lines;
+    },
     async executeCollect() {
+      const p = this.collect.preview || {};
+      const from = String(p.from_address || "").trim();
+      const to = String(p.to_address || "").trim();
+      const chain = String(p.chain || p.chain_label || "").toLowerCase();
+      const same = from && to && (("eth" === chain || "bsc" === chain || "bnb" === chain)
+        ? from.toLowerCase() === to.toLowerCase()
+        : from === to);
+      if (same) {
+        const detail = "发送地址与接收地址相同，无法归集";
+        this.collect.doneOk = false;
+        this.collect.resultError = true;
+        this.collect.transferLines = [];
+        this.collect.preview = { ...this.collect.preview, message: "", error: detail, ok: false };
+        this.collect.result = detail;
+        toast(detail, "err");
+        return;
+      }
+      this.collect.executing = true;
       this.collect.loading = true;
       try {
         const body = await api.collectExecute(this.collect.rowId);
-        this.collect.result = JSON.stringify(body.data || body, null, 2);
+        const d = body.data || body || {};
+        if (d.ok === false) {
+          this.collect.doneOk = false;
+          this.collect.resultError = true;
+          this.collect.transferLines = this.transferLinesFrom(d);
+          const detail = d.error || d.message || "归集失败";
+          this.collect.preview = { ...this.collect.preview, message: "", error: detail, ok: false };
+          this.collect.result = this.collect.transferLines.length ? "" : detail;
+          toast(detail, "err");
+          return;
+        }
+        this.collect.doneOk = true;
         this.collect.resultError = false;
+        this.collect.transferLines = this.transferLinesFrom(d);
+        this.collect.result = this.collect.transferLines.length ? "" : JSON.stringify(d, null, 2);
+        this.collect.preview = { ...this.collect.preview, message: "", error: "" };
         toast("归集完成");
         this.reload();
       } catch (e) {
-        this.collect.result = e.message;
+        const d = (e.body && e.body.data) || {};
+        this.collect.doneOk = false;
         this.collect.resultError = true;
-        toast(e.message, "err");
+        this.collect.transferLines = this.transferLinesFrom(d);
+        const detail = d.error || d.message || e.message || "归集失败";
+        this.collect.preview = { ...this.collect.preview, message: "", error: detail, ok: false };
+        this.collect.result = this.collect.transferLines.length ? "" : detail;
+        toast(detail, "err");
       } finally {
         this.collect.loading = false;
+        this.collect.executing = false;
       }
     },
   },

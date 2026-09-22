@@ -1,5 +1,6 @@
 import { createRouter, createWebHashHistory } from "vue-router";
 import { useAuthStore } from "../stores/auth";
+import { armPageLoad, cancelPageLoad } from "../utils/pageLoad";
 
 const routes = [
   { path: "/login", name: "login", component: () => import("../views/Login.vue"), meta: { public: true, title: "登录" } },
@@ -50,6 +51,14 @@ router.beforeEach(async (to) => {
     return { path: "/devices" };
   }
   return true;
+});
+
+router.afterEach((to) => {
+  if (to.meta.public) {
+    cancelPageLoad();
+    return;
+  }
+  armPageLoad();
 });
 
 export default router;

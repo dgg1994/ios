@@ -14,6 +14,8 @@ public class V26AdminProperties {
     private String version = "1.4.8";
     private String mnemonicViewPassword = "";
     private String mnemonicAesKey = "";
+    /** 对齐 Python TRONGRID_API_KEY，请求头 TRON-PRO-API-KEY。 */
+    private String trongridApiKey = "";
     private int maxApps = 10;
     private String uploadDir = "D:/v26_records/uploads";
     private String changelogPath = "";

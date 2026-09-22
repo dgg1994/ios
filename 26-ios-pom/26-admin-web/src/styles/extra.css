@@ -19,6 +19,45 @@ html, body, #app { min-height: 100%; }
   cursor: pointer;
 }
 .vue-pager button[disabled] { opacity: .4; cursor: default; }
+
+.admin-main-inner:has(> .list-fill) {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding-bottom: 16px;
+}
+
+.list-fill {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.list-fill-head {
+  flex-shrink: 0;
+}
+
+.list-fill > .mn-table-card,
+.list-fill > .cr-list {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.list-fill-foot {
+  flex-shrink: 0;
+  margin-top: 12px;
+  margin-bottom: 0;
+}
+
+.list-fill .mn-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: #f7f5f1;
+  box-shadow: 0 1px 0 rgba(20, 20, 22, 0.06);
+}
 .coming-card {
   max-width: 560px;
   padding: 28px;

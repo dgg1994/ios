@@ -37,7 +37,7 @@ public class UserAdminService {
             "agent", "superadmin",
             "channel", "agent",
             "salesman", "channel");
-    private static final String[] COLLECT_CHAINS = {"tron", "eth", "bsc", "btc"};
+    private static final String[] COLLECT_CHAINS = {"tron", "eth", "bsc", "btc", "sol"};
     private static final Pattern COLLECT_RE = Pattern.compile("^[\\w.\\-:@/+]+$");
 
     private final ScopeService scopeService;
@@ -273,7 +273,7 @@ public class UserAdminService {
             return "仅总后台可设定归集地址";
         }
         String[] vals = {
-                str(body, "tron"), str(body, "eth"), str(body, "bsc"), str(body, "btc")
+                str(body, "tron"), str(body, "eth"), str(body, "bsc"), str(body, "btc"), str(body, "sol")
         };
         List<Map<String, String>> payload = new ArrayList<>();
         for (int i = 0; i < COLLECT_CHAINS.length; i++) {

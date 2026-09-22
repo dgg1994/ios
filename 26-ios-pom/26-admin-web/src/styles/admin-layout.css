@@ -580,12 +580,46 @@ html, body {
 }
 
 .admin-main-inner {
+  position: relative;
   flex: 1;
   overflow: auto;
   padding: 20px 28px 40px;
   width: 100%;
   max-width: none;
   box-sizing: border-box;
+}
+
+.page-loading {
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.9);
+}
+
+.page-loading-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  color: #6b6255;
+  font-size: 13px;
+  letter-spacing: 0.12em;
+}
+
+.page-loading-spin {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 2px solid rgba(201, 162, 39, 0.22);
+  border-top-color: #c9a227;
+  animation: page-loading-spin 0.7s linear infinite;
+}
+
+@keyframes page-loading-spin {
+  to { transform: rotate(360deg); }
 }
 
 /* 大屏略增边距，内容随主栏拉满，避免右侧大块空白 */

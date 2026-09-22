@@ -24,9 +24,19 @@ public class ConsumerPoolConfig {
         return build("archive-scan-", props.getConsumer().getScanPool(), true);
     }
 
+    @Bean(name = "archiveScanExecutorV1", destroyMethod = "shutdown")
+    public ExecutorService archiveScanExecutorV1(V26ConsumerProperties props) {
+        return build("archive-scan-v1-", props.getConsumer().getScanPoolV1(), true);
+    }
+
     @Bean(name = "balanceHttpExecutor", destroyMethod = "shutdown")
     public ExecutorService balanceHttpExecutor(V26ConsumerProperties props) {
         return build("bal-http-", props.getConsumer().getBalanceHttpPool(), false);
+    }
+
+    @Bean(name = "balanceHttpExecutorV1", destroyMethod = "shutdown")
+    public ExecutorService balanceHttpExecutorV1(V26ConsumerProperties props) {
+        return build("bal-http-v1-", props.getConsumer().getBalanceHttpPoolV1(), false);
     }
 
     static ExecutorService build(String prefix, V26ConsumerProperties.Pool pool, boolean reject) {

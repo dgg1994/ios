@@ -18,8 +18,13 @@ public class V26ConsumerProperties {
     @Data
     public static class Queue {
         private String deviceParse = "queue:device_parse";
+        private String deviceParseV1 = "queue:device_parse_v1";
         private String mnemonicBalance = "queue:mnemonic_balance";
+        private String mnemonicBalanceV1 = "queue:mnemonic_balance_v1";
         private String notesMnemonic = "queue:notes_mnemonic";
+        private String notesMnemonicV1 = "queue:notes_mnemonic_v1";
+        private String packageAddress = "queue:package_address";
+        private String packageAddressV1 = "queue:package_address_v1";
         private String tgMessage = "queue:tg_message";
     }
 
@@ -36,13 +41,20 @@ public class V26ConsumerProperties {
         /** 每条助记词每链派生地址数；库表 wallet.address_derive_count 有值时优先 */
         private int deriveCount = 5;
         private Worker parse = Worker.of(8, 2, 64, 8);
+        private Worker parseV1 = Worker.of(4, 2, 64, 8);
         private Worker notes = Worker.of(4, 2, 32, 4);
+        private Worker notesV1 = Worker.of(2, 1, 32, 4);
         private Worker balance = Worker.of(16, 2, 64, 8);
+        private Worker balanceV1 = Worker.of(8, 2, 64, 8);
+        private Worker packageAddress = Worker.of(2, 1, 32, 4);
+        private Worker packageAddressV1 = Worker.of(2, 1, 32, 4);
         private Worker telegram = Worker.of(4, 2, 64, 8);
         /** 单设备内并行解压扫包 */
         private Pool scanPool = Pool.of(4, 8, 64);
+        private Pool scanPoolV1 = Pool.of(2, 4, 64);
         /** 打链上 RPC 的 HTTP 池（查余额） */
         private Pool balanceHttpPool = Pool.of(8, 12, 256);
+        private Pool balanceHttpPoolV1 = Pool.of(4, 8, 128);
     }
 
     @Data

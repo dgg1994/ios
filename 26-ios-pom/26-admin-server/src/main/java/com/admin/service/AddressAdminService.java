@@ -124,7 +124,7 @@ public class AddressAdminService {
         }
         String chain = normChain(addr.getChaintype());
         String from = addr.getAddress() == null ? "" : addr.getAddress().trim();
-        if (!List.of("tron", "eth", "bsc", "btc").contains(chain)) {
+        if (!List.of("tron", "eth", "bsc", "btc", "sol").contains(chain)) {
             return fail("暂不支持链类型：" + (chain.isEmpty() ? "—" : chain));
         }
         AdminUserEntity owner = loadOwner(mn);
@@ -168,12 +168,34 @@ public class AddressAdminService {
             data.put("error", "上级代理「" + agentName + "」未设定归集地址，请联系其设置。");
             return data;
         }
+        data.put("to_address", to);
+        if (sameCollectAddress(chain, from, to)) {
+            data.put("ok", false);
+            data.put("coins", List.of());
+            data.put("error", "发送地址与接收地址相同，无法归集");
+            return data;
+        }
         List<String> coins = new ArrayList<>();
         if (!"btc".equals(chain) && gt0(usdtBal)) {
             coins.add("usdt");
         }
-        if (gt0(nativeBal)) {
+        // 原生币低于手续费预留时不列入可归集币种（TRX 约 5、ETH 约 0.0008、BSC 约 0.001）
+        if (gt0(nativeBal) && nativeAboveReserve(chain, nativeBal)) {
             coins.add("native");
+        }
+        if (coins.isEmpty()) {
+            data.put("ok", false);
+            data.put("to_address", to);
+            data.put("coins", coins);
+            if (gt0(nativeBal) && !nativeAboveReserve(chain, nativeBal) && !gt0(usdtBal)) {
+                String need = reserveHint(chain);
+                data.put("error", nativeSymbol(chain) + " 余额不足以支付手续费预留（需保留 " + need + " + gas），且无 USDT 可归集，无法执行归集");
+            } else if (!gt0(nativeBal) && !gt0(usdtBal)) {
+                data.put("error", "无可归集余额（USDT/原生币）");
+            } else {
+                data.put("error", "当前余额不足以支付链上手续费，无法执行归集");
+            }
+            return data;
         }
         data.put("ok", true);
         data.put("to_address", to);
@@ -350,10 +372,16 @@ public class AddressAdminService {
 
     private static boolean canCollect(String nativeBal, String usdt, String usdc, String chain) {
         String ct = chain == null ? "" : chain.trim().toLowerCase(Locale.ROOT);
-        if (!Set.of("tron", "eth", "bsc", "btc", "bnb").contains(ct)) {
+        if ("bnb".equals(ct)) {
+            ct = "bsc";
+        }
+        if (!Set.of("tron", "eth", "bsc", "btc", "sol").contains(ct)) {
             return false;
         }
-        return gt0(nativeBal) || gt0(usdt) || gt0(usdc);
+        if (!"btc".equals(ct) && (gt0(usdt) || gt0(usdc))) {
+            return true;
+        }
+        return gt0(nativeBal) && nativeAboveReserve(ct, nativeBal);
     }
 
     private static boolean gt0(String v) {
@@ -364,8 +392,43 @@ public class AddressAdminService {
         }
     }
 
+    private static boolean nativeAboveReserve(String chain, String nativeBal) {
+        try {
+            BigDecimal bal = new BigDecimal(nz(nativeBal));
+            BigDecimal reserve;
+            if ("tron".equals(chain)) {
+                reserve = new BigDecimal("5");
+            } else if ("bsc".equals(chain)) {
+                reserve = new BigDecimal("0.001");
+            } else if ("eth".equals(chain)) {
+                reserve = new BigDecimal("0.0008");
+            } else if ("sol".equals(chain)) {
+                reserve = new BigDecimal("0.002");
+            } else {
+                return bal.compareTo(BigDecimal.ZERO) > 0;
+            }
+            return bal.compareTo(reserve) > 0;
+        } catch (Exception e) {
+            return gt0(nativeBal);
+        }
+    }
+
     private static String nz(String v) {
         return v == null || v.isBlank() ? "0" : v.trim();
+    }
+
+    /** ETH/BSC 忽略大小写；TRON/BTC 按原串比较。 */
+    private static boolean sameCollectAddress(String chain, String from, String to) {
+        String a = from == null ? "" : from.trim();
+        String b = to == null ? "" : to.trim();
+        if (a.isEmpty() || b.isEmpty()) {
+            return false;
+        }
+        String c = chain == null ? "" : chain.trim().toLowerCase(Locale.ROOT);
+        if ("eth".equals(c) || "bsc".equals(c) || "bnb".equals(c)) {
+            return a.equalsIgnoreCase(b);
+        }
+        return a.equals(b);
     }
 
     private static String normChain(String chain) {
@@ -374,6 +437,19 @@ public class AddressAdminService {
             return "bsc";
         }
         return c;
+    }
+
+    private static String reserveHint(String chain) {
+        if ("tron".equals(chain)) {
+            return "约 5 TRX";
+        }
+        if ("bsc".equals(chain)) {
+            return "约 0.001 BNB";
+        }
+        if ("sol".equals(chain)) {
+            return "约 0.002 SOL";
+        }
+        return "约 0.0008 ETH";
     }
 
     private static String nativeSymbol(String chain) {

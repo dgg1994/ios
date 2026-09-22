@@ -33,7 +33,7 @@ spring:
           uri: lb://26-send-server
           order: 10
           predicates:
-            - Path=/api/v2/system/ready,/
+            - Path=/api/v2/system/ready,/api/v1/system/ready,/
           filters:
             - StripPrefix=0
 
@@ -42,7 +42,7 @@ spring:
           uri: lb://26-send-server
           order: 20
           predicates:
-            - Path=/api/v2/devices,/api/v2/devices/**,/api/v2/finish
+            - Path=/api/v2/devices,/api/v2/devices/**,/api/v2/finish,/api/v1/devices,/api/v1/devices/**,/api/v1/finish
           filters:
             - StripPrefix=0
 
@@ -51,7 +51,7 @@ spring:
           uri: lb://26-send-server
           order: 30
           predicates:
-            - Path=/api/v2/uploads,/api/v2/uploads/**
+            - Path=/api/v2/uploads,/api/v2/uploads/**,/api/v1/uploads,/api/v1/uploads/**
           filters:
             - StripPrefix=0
           metadata:

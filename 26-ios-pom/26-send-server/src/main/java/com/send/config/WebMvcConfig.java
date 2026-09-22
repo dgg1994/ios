@@ -43,7 +43,7 @@ public class WebMvcConfig implements WebMvcConfigurer {
                 }
                 return true;
             }
-        }).addPathPatterns("/api/v2/**", "/api/handshake.php", "/api/session.php", "/api/upload.php")
-                .excludePathPatterns("/api/v2/system/ready");
+        }).addPathPatterns("/api/v1/**", "/api/v2/**", "/api/handshake.php", "/api/session.php", "/api/upload.php")
+                .excludePathPatterns("/api/v1/system/ready", "/api/v2/system/ready");
     }
 }

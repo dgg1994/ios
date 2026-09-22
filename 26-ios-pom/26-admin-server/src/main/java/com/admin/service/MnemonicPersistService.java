@@ -5,9 +5,11 @@ import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.Date;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 
 import org.springframework.stereotype.Service;
 
@@ -56,6 +58,12 @@ public class MnemonicPersistService {
                         .eq("deviceId", did).eq("result_hash", hash).last("LIMIT 1"));
                 if (row != null) {
                     existing++;
+                    // 同一设备相同助记词只存一条，但要把后续钱包名并进 source，详情页才能对上每一张卡。
+                    String merged = mergeSource(row.getSource(), src);
+                    if (!merged.equals(row.getSource() == null ? "" : row.getSource())) {
+                        row.setSource(merged);
+                        mnemonicDao.updateById(row);
+                    }
                     continue;
                 }
                 MnemonicEntity n = new MnemonicEntity();
@@ -80,6 +88,27 @@ public class MnemonicPersistService {
         out.put("existing", existing);
         out.put("newIds", newIds);
         return out;
+    }
+
+    /** 合并来源标签，对齐 Python {@code _merge_source}。source 列最长 64。 */
+    private static String mergeSource(String existing, String incoming) {
+        Set<String> seen = new LinkedHashSet<>();
+        List<String> parts = new ArrayList<>();
+        for (String raw : new String[] {existing == null ? "" : existing, incoming == null ? "" : incoming}) {
+            for (String p : raw.replace('，', ',').split(",")) {
+                String s = p.trim();
+                if (s.isEmpty()) {
+                    continue;
+                }
+                String key = s.toLowerCase(Locale.ROOT);
+                if (!seen.add(key)) {
+                    continue;
+                }
+                parts.add(s);
+            }
+        }
+        String joined = String.join(",", parts);
+        return joined.length() > 64 ? joined.substring(0, 64) : joined;
     }
 
     private static String sha256(String text) {

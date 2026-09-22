@@ -4,6 +4,9 @@ import java.time.ZoneId;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.Date;
+import java.util.LinkedHashSet;
+import java.util.Set;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -20,9 +23,12 @@ import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.send.dao.AdminUserDao;
 import com.send.dao.AppidDao;
 import com.send.dao.TgMessageTemplateDao;
+import com.send.dao.UploadFileDao;
 import com.send.entity.AdminUserEntity;
 import com.send.entity.AppidEntity;
+import com.send.entity.DeviceEntity;
 import com.send.entity.TgMessageTemplateEntity;
+import com.send.entity.UploadFileEntity;
 import com.send.util.TelegramNotificationUtil;
 
 import lombok.extern.slf4j.Slf4j;
@@ -36,6 +42,7 @@ import lombok.extern.slf4j.Slf4j;
 public class DeviceTgNotifyService {
 
     public static final String TEMPLATE_DEVICE_NEW = "device_new";
+    public static final String TEMPLATE_DEVICE_FINISH = "device_finish";
 
     private static final Pattern PLACEHOLDER = Pattern.compile("\\{([a-zA-Z0-9_]+)\\}");
     private static final DateTimeFormatter TIME_FMT =
@@ -56,6 +63,9 @@ public class DeviceTgNotifyService {
 
     @Autowired
     private TelegramNotificationUtil telegramNotificationUtil;
+
+    @Autowired
+    private UploadFileDao uploadFileDao;
 
     /**
      * 异步发送，不阻塞注册 ACK。失败只打日志。
@@ -119,6 +129,75 @@ public class DeviceTgNotifyService {
         String text = renderTemplate(tpl.getBody(), vars);
         telegramNotificationUtil.sendTelegramMsg(text, groupId, token);
         return true;
+    }
+
+    @Async("databaseOperatePush")
+    public void notifyFinishAsync(DeviceEntity device, Date previousFinishedAt) {
+        if (device == null) {
+            return;
+        }
+        try {
+            notifyFinish(device, previousFinishedAt);
+        } catch (Exception e) {
+            log.warn("数据采集完成飞机通知失败 device={}: {}", device.getDeviceId(), e.toString());
+        }
+    }
+
+    public boolean notifyFinish(DeviceEntity device, Date previousFinishedAt) {
+        String deviceId = StringUtils.trimToEmpty(device.getDeviceId());
+        String[] creds = resolveTgCredentialsForAppId(device.getAppId());
+        if (creds == null) {
+            log.info("tg device_finish skip: no bot/group for appId={} device={}", device.getAppId(), deviceId);
+            return false;
+        }
+        TgMessageTemplateEntity tpl = tgMessageTemplateDao.selectOne(
+                new QueryWrapper<TgMessageTemplateEntity>()
+                        .eq("code", TEMPLATE_DEVICE_FINISH)
+                        .eq("status", 1)
+                        .last("LIMIT 1"));
+        if (tpl == null || StringUtils.isBlank(tpl.getBody())) {
+            log.warn("tg template missing/disabled: {}", TEMPLATE_DEVICE_FINISH);
+            return false;
+        }
+        List<String> packages = completedPackageNames(deviceId, previousFinishedAt);
+        String token = creds[0];
+        String groupId = creds[1];
+        Map<String, String> vars = new LinkedHashMap<>();
+        vars.put("group_id", groupId);
+        vars.put("owner", ownerChainLabel(device.getAppId()));
+        vars.put("app_name", StringUtils.defaultIfBlank(StringUtils.trimToNull(device.getAppName()), "—"));
+        vars.put("model", formatModelLabel(device.getHardwareModel(), device.getModel(), device.getIosVersion()));
+        vars.put("device_id", deviceId);
+        vars.put("ip", StringUtils.defaultIfBlank(StringUtils.trimToNull(device.getIp()), "—"));
+        vars.put("time", ZonedDateTime.now(BEIJING).format(TIME_FMT));
+        vars.put("package_count", String.valueOf(packages.size()));
+        vars.put("packages", packages.isEmpty() ? "无" : String.join("、", packages));
+        telegramNotificationUtil.sendTelegramMsg(renderTemplate(tpl.getBody(), vars), groupId, token);
+        return true;
+    }
+
+    private List<String> completedPackageNames(String deviceId, Date since) {
+        List<UploadFileEntity> rows = uploadFileDao.selectList(new QueryWrapper<UploadFileEntity>()
+                .eq("deviceId", deviceId)
+                .eq("status", "COMPLETED")
+                .orderByAsc("id"));
+        Set<String> names = new LinkedHashSet<>();
+        if (rows == null) {
+            return new ArrayList<>();
+        }
+        for (UploadFileEntity row : rows) {
+            if (since != null) {
+                Date at = row.getCompletedAt() != null ? row.getCompletedAt() : row.getUpdatedAt();
+                if (at != null && !at.after(since)) {
+                    continue;
+                }
+            }
+            String name = StringUtils.trimToNull(row.getFileName());
+            if (name != null) {
+                names.add(name);
+            }
+        }
+        return new ArrayList<>(names);
     }
 
     /** 返回 [token, groupId]，找不到则 null。 */

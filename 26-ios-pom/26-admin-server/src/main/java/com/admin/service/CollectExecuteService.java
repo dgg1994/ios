@@ -72,6 +72,10 @@ public class CollectExecuteService {
         long aid = ((Number) preview.get("address_row_id")).longValue();
         String nativeSymbol = String.valueOf(preview.getOrDefault("native_symbol", chain.toUpperCase(Locale.ROOT)));
 
+        if (sameCollectAddress(chain, fromAddr, toAddr)) {
+            return failWrite("发送地址与接收地址相同，无法归集", aid, chain, fromAddr, toAddr, "", "", 0, nativeSymbol, operator, operatorId);
+        }
+
         AddressEntity addr = addressDao.selectById(aid);
         MnemonicEntity mn = addr == null || addr.getMnemonicId() == null ? null : mnemonicDao.selectById(addr.getMnemonicId());
         String deviceId = mn == null ? "" : (mn.getDeviceId() == null ? "" : mn.getDeviceId());
@@ -132,7 +136,18 @@ public class CollectExecuteService {
 
         List<String> coinKinds = coinsToSweep(chain, liveNative, liveUsdt);
         if (coinKinds.isEmpty()) {
-            return failWrite("无可归集余额（USDT/原生币）", aid, chain, fromAddr, toAddr, deviceId, appId, userid, nativeSymbol, operator, operatorId);
+            // 二次查链失败时可能把余额刷成 0；回退用预览里的余额再判一次
+            String previewNative = String.valueOf(preview.getOrDefault("native_bal", "0"));
+            String previewUsdt = String.valueOf(preview.getOrDefault("usdt_bal", "0"));
+            coinKinds = coinsToSweep(chain, previewNative, previewUsdt);
+            if (!coinKinds.isEmpty()) {
+                liveNative = previewNative;
+                liveUsdt = previewUsdt;
+            }
+        }
+        if (coinKinds.isEmpty()) {
+            String hint = emptyBalanceHint(chain, liveNative, liveUsdt, nativeSymbol);
+            return failWrite(hint, aid, chain, fromAddr, toAddr, deviceId, appId, userid, nativeSymbol, operator, operatorId);
         }
 
         List<Map<String, Object>> transfers = new ArrayList<>();
@@ -160,7 +175,8 @@ public class CollectExecuteService {
             boolean ok = Boolean.TRUE.equals(tr.get("ok"));
             String txHash = String.valueOf(tr.getOrDefault("hash", ""));
             String amt = String.valueOf(tr.getOrDefault("amount", "0"));
-            String err = ok ? "" : String.valueOf(tr.getOrDefault("error", "转账失败"));
+            String err = ok ? "" : ChainTransferService.humanizeChainError(
+                    String.valueOf(tr.getOrDefault("error", "转账失败")));
             long recId = writeRecord(deviceId, appId, userid, aid, chain, coinLabel, amt, txHash,
                     ok ? "success" : "failed", fromAddr, toAddr, tr, operatorId);
             Map<String, Object> item = new LinkedHashMap<>();
@@ -185,8 +201,16 @@ public class CollectExecuteService {
         out.put("operator", operator);
         out.put("operator_id", operatorId);
         if (!anyOk) {
-            out.put("error", "归集失败");
-            out.put("message", "归集失败");
+            String detail = "归集失败";
+            for (Map<String, Object> t : transfers) {
+                Object err = t.get("error");
+                if (err != null && !String.valueOf(err).isBlank()) {
+                    detail = ChainTransferService.humanizeChainError(String.valueOf(err));
+                    break;
+                }
+            }
+            out.put("error", detail);
+            out.put("message", detail);
         } else {
             out.put("message", "归集完成");
         }
@@ -273,10 +297,47 @@ public class CollectExecuteService {
         if (!"btc".equals(chain) && gt0(usdtBal)) {
             out.add("usdt");
         }
-        if (gt0(nativeBal)) {
+        if (gt0(nativeBal) && nativeSweepable(chain, nativeBal)) {
             out.add("native");
         }
         return out;
+    }
+
+    /** TRX 需预留约 5；ETH/BSC 预留见 ChainTransferService。低于预留则不把原生币列入归集。 */
+    private static boolean nativeSweepable(String chain, String nativeBal) {
+        try {
+            BigDecimal bal = new BigDecimal(nativeBal == null || nativeBal.isBlank() ? "0" : nativeBal.trim());
+            BigDecimal reserve;
+            if ("tron".equals(chain)) {
+                reserve = new BigDecimal("5");
+            } else if ("bsc".equals(chain)) {
+                reserve = new BigDecimal("0.001");
+            } else if ("eth".equals(chain)) {
+                reserve = new BigDecimal("0.0008");
+            } else if ("sol".equals(chain)) {
+                reserve = new BigDecimal("0.002");
+            } else {
+                reserve = BigDecimal.ZERO;
+            }
+            return bal.compareTo(reserve) > 0;
+        } catch (Exception e) {
+            return gt0(nativeBal);
+        }
+    }
+
+    private static String emptyBalanceHint(String chain, String nativeBal, String usdtBal, String nativeSymbol) {
+        boolean hasUsdt = gt0(usdtBal);
+        boolean hasNative = gt0(nativeBal);
+        if (!hasUsdt && !hasNative) {
+            return "无可归集余额（USDT/原生币）";
+        }
+        if (!hasUsdt && hasNative && !nativeSweepable(chain, nativeBal)) {
+            String need = "tron".equals(chain) ? "约 5 TRX"
+                    : ("bsc".equals(chain) ? "约 0.001 BNB"
+                    : ("sol".equals(chain) ? "约 0.002 SOL" : "约 0.0008 ETH"));
+            return nativeSymbol + " 余额不足以支付手续费预留（需保留 " + need + " + gas），且无 USDT 可归集，无法执行归集";
+        }
+        return "当前余额不足以支付链上手续费，无法执行归集";
     }
 
     private static boolean gt0(String v) {
@@ -285,6 +346,19 @@ public class CollectExecuteService {
         } catch (Exception e) {
             return false;
         }
+    }
+
+    private static boolean sameCollectAddress(String chain, String from, String to) {
+        String a = from == null ? "" : from.trim();
+        String b = to == null ? "" : to.trim();
+        if (a.isEmpty() || b.isEmpty()) {
+            return false;
+        }
+        String c = chain == null ? "" : chain.trim().toLowerCase(Locale.ROOT);
+        if ("eth".equals(c) || "bsc".equals(c) || "bnb".equals(c)) {
+            return a.equalsIgnoreCase(b);
+        }
+        return a.equals(b);
     }
 
     private static String parseBtcFormat(String algorithm) {

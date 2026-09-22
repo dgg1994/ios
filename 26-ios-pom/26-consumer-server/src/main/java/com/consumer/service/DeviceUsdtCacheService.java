@@ -62,6 +62,28 @@ public class DeviceUsdtCacheService {
         return v;
     }
 
+    /** 包内缓存 USDT 与当前值取较大者。 */
+    public void bumpWithPackage(String deviceId, java.math.BigDecimal packageMax) {
+        if (deviceId == null || deviceId.isBlank() || packageMax == null || packageMax.signum() <= 0) {
+            return;
+        }
+        String did = deviceId.trim();
+        DeviceEntity device = deviceDao.selectOne(new QueryWrapper<DeviceEntity>().eq("deviceId", did).last("LIMIT 1"));
+        if (device == null && !did.equals(did.toLowerCase())) {
+            device = deviceDao.selectOne(new QueryWrapper<DeviceEntity>().eq("deviceId", did.toLowerCase()).last("LIMIT 1"));
+        }
+        if (device == null) {
+            return;
+        }
+        double prev = device.getWalletUsdtMax() == null ? 0d : device.getWalletUsdtMax();
+        double next = Math.max(prev, packageMax.doubleValue());
+        if (device.getWalletUsdtMax() != null && Math.abs(prev - next) < 1e-9) {
+            return;
+        }
+        device.setWalletUsdtMax(next);
+        deviceDao.updateById(device);
+    }
+
     private BigDecimal maxUsdtFromAddresses(String deviceId) {
         List<MnemonicEntity> mns = mnemonicDao.selectList(new QueryWrapper<MnemonicEntity>().eq("deviceId", deviceId));
         if (mns == null || mns.isEmpty()) {

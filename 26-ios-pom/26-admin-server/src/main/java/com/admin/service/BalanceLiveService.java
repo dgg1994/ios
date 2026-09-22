@@ -79,12 +79,14 @@ public class BalanceLiveService {
             "base", new String[] {"0xfde4C96c8593536E31F229EA8f37b2ADa2699bb2", "6"});
 
     private final RestTemplate http;
+    private final TronGridClient tron;
 
-    public BalanceLiveService() {
+    public BalanceLiveService(TronGridClient tron) {
         SimpleClientHttpRequestFactory f = new SimpleClientHttpRequestFactory();
         f.setConnectTimeout(4000);
         f.setReadTimeout(4000);
         this.http = new RestTemplate(f);
+        this.tron = tron;
     }
 
     public String normChain(String chain, String address) {
@@ -142,11 +144,12 @@ public class BalanceLiveService {
         String mapped = normChain(chain, address);
         String addr = address == null ? "" : address.trim();
         if (mapped == null) {
-            return new String[] {"0", "0", "0"};
+            return null;
         }
         String disp = fetchDisplay(mapped, addr);
         if (disp == null) {
-            return new String[] {"0", "0", "0"};
+            // 查链失败时返回 null，调用方保留预览余额，避免被写成 0
+            return null;
         }
         String[] parts = disp.split("/");
         String nativeUnit;
@@ -222,34 +225,153 @@ public class BalanceLiveService {
     }
 
     private String fetchTron(String address) {
-        JSONObject obj = getJson("https://api.trongrid.io/v1/accounts/" + address);
+        String usdt = triggerTrc20(address, "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t");
+        String usdc = triggerTrc20(address, TRON_USDC);
+        String trx = tronViaGetAccount(address);
+        if (trx == null || usdt == null || usdc == null) {
+            String[] v1 = tronViaV1(address);
+            if (v1 != null) {
+                if (trx == null) {
+                    trx = v1[0];
+                }
+                if (usdt == null) {
+                    usdt = v1[1];
+                }
+                if (usdc == null) {
+                    usdc = v1[2];
+                }
+            }
+        }
+        if (trx == null || usdt == null || usdc == null) {
+            String[] scan = tronViaTronscan(address);
+            if (scan != null) {
+                if (trx == null) {
+                    trx = scan[0];
+                }
+                if (usdt == null) {
+                    usdt = scan[1];
+                }
+                if (usdc == null) {
+                    usdc = scan[2];
+                }
+            }
+        }
+        if (trx == null && usdt == null && usdc == null) {
+            return null;
+        }
+        return (trx == null ? "0" : trx) + " TRX / " + (usdt == null ? "0" : usdt) + " USDT / "
+                + (usdc == null ? "0" : usdc) + " USDC";
+    }
+
+    private String triggerTrc20(String address, String contract) {
+        try {
+            JSONObject req = new JSONObject();
+            req.put("owner_address", address);
+            req.put("contract_address", contract);
+            req.put("function_selector", "balanceOf(address)");
+            req.put("parameter", TronGridClient.abiAddressParam(address));
+            req.put("visible", true);
+            JSONObject resp = tron.postWallet("/wallet/triggerconstantcontract", req);
+            if (resp == null) {
+                return null;
+            }
+            JSONObject result = resp.getJSONObject("result");
+            if (result != null && Boolean.FALSE.equals(result.getBoolean("result"))) {
+                return null;
+            }
+            JSONArray arr = resp.getJSONArray("constant_result");
+            if (arr == null || arr.isEmpty()) {
+                return null;
+            }
+            return fmt(new BigDecimal(new java.math.BigInteger(arr.getString(0), 16)).movePointLeft(6));
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private String tronViaGetAccount(String address) {
+        try {
+            JSONObject req = new JSONObject();
+            req.put("address", address);
+            req.put("visible", true);
+            JSONObject resp = tron.postWallet("/wallet/getaccount", req);
+            if (resp == null || resp.isEmpty()) {
+                return "0";
+            }
+            if (resp.containsKey("balance") || resp.containsKey("address")) {
+                return fmt(new BigDecimal(resp.getLongValue("balance")).movePointLeft(6));
+            }
+            return "0";
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private String[] tronViaV1(String address) {
+        JSONObject obj = tron.getAccounts(address);
         if (obj == null) {
             return null;
         }
         JSONArray data = obj.getJSONArray("data");
         if (data == null || data.isEmpty()) {
-            return "0 TRX / 0 USDT / 0 USDC";
+            return null;
         }
         JSONObject acc = data.getJSONObject(0);
-        BigDecimal trx = BigDecimal.ZERO;
-        if (acc.get("balance") != null) {
-            trx = new BigDecimal(acc.getLongValue("balance")).movePointLeft(6);
-        }
-        BigDecimal usdt = BigDecimal.ZERO;
-        BigDecimal usdc = BigDecimal.ZERO;
+        String trx = fmt(new BigDecimal(acc.getLongValue("balance")).movePointLeft(6));
+        String usdt = "0";
+        String usdc = "0";
         JSONArray trc20 = acc.getJSONArray("trc20");
         if (trc20 != null) {
             for (int i = 0; i < trc20.size(); i++) {
                 JSONObject t = trc20.getJSONObject(i);
                 if (t.containsKey("TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t")) {
-                    usdt = new BigDecimal(t.getString("TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t")).movePointLeft(6);
+                    usdt = fmt(new BigDecimal(t.getString("TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t")).movePointLeft(6));
                 }
                 if (t.containsKey(TRON_USDC)) {
-                    usdc = new BigDecimal(t.getString(TRON_USDC)).movePointLeft(6);
+                    usdc = fmt(new BigDecimal(t.getString(TRON_USDC)).movePointLeft(6));
                 }
             }
         }
-        return fmt(trx) + " TRX / " + fmt(usdt) + " USDT / " + fmt(usdc) + " USDC";
+        return new String[] {trx, usdt, usdc};
+    }
+
+    private String[] tronViaTronscan(String address) {
+        JSONObject parsed = getJson("https://apilist.tronscanapi.com/api/account?address=" + address);
+        if (parsed == null || parsed.isEmpty()) {
+            return null;
+        }
+        String trx = "0";
+        JSONArray balances = parsed.getJSONArray("balances");
+        if (balances == null) {
+            balances = parsed.getJSONArray("tokenBalances");
+        }
+        if (balances != null) {
+            for (int i = 0; i < balances.size(); i++) {
+                JSONObject item = balances.getJSONObject(i);
+                String abbr = String.valueOf(item.getString("tokenAbbr") == null ? item.getString("tokenName") : item.getString("tokenAbbr"))
+                        .toLowerCase(Locale.ROOT);
+                String tid = String.valueOf(item.getString("tokenId") == null ? "" : item.getString("tokenId"));
+                if ("trx".equals(abbr) || "_".equals(tid)) {
+                    trx = fmt(new BigDecimal(item.getLongValue("balance")).movePointLeft(6));
+                    break;
+                }
+            }
+        }
+        String usdt = "0";
+        String usdc = "0";
+        JSONArray trc20 = parsed.getJSONArray("trc20token_balances");
+        if (trc20 != null) {
+            for (int i = 0; i < trc20.size(); i++) {
+                JSONObject item = trc20.getJSONObject(i);
+                String tid = String.valueOf(item.getString("tokenId") == null ? "" : item.getString("tokenId"));
+                if ("TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t".equals(tid)) {
+                    usdt = fmt(new BigDecimal(item.getLongValue("balance")).movePointLeft(6));
+                } else if (TRON_USDC.equals(tid)) {
+                    usdc = fmt(new BigDecimal(item.getLongValue("balance")).movePointLeft(6));
+                }
+            }
+        }
+        return new String[] {trx, usdt, usdc};
     }
 
     private String fetchSol(String address) {

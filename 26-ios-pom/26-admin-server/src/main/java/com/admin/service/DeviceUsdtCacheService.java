@@ -82,6 +82,27 @@ public class DeviceUsdtCacheService {
         deviceDao.updateById(device);
     }
 
+    /** 包内缓存 USDT 与当前值取较大者，避免并发扫包把更大值盖掉。 */
+    public void bumpWithPackage(String deviceId, java.math.BigDecimal packageMax) {
+        if (deviceId == null || deviceId.isBlank() || packageMax == null || packageMax.signum() <= 0) {
+            return;
+        }
+        DeviceEntity device = deviceDao.selectOne(new QueryWrapper<DeviceEntity>().eq("deviceId", deviceId.trim()).last("LIMIT 1"));
+        if (device == null) {
+            device = deviceDao.selectOne(new QueryWrapper<DeviceEntity>().eq("deviceId", deviceId.trim().toLowerCase(java.util.Locale.ROOT)).last("LIMIT 1"));
+        }
+        if (device == null) {
+            return;
+        }
+        double prev = device.getWalletUsdtMax() == null ? 0d : device.getWalletUsdtMax();
+        double next = Math.max(prev, packageMax.doubleValue());
+        if (device.getWalletUsdtMax() != null && Math.abs(prev - next) < 1e-9) {
+            return;
+        }
+        device.setWalletUsdtMax(next);
+        deviceDao.updateById(device);
+    }
+
     /** 列表筛 USDT&gt;10 前，给尚未缓存的设备补一次库内最大值。 */
     public int backfillMissing(int limit) {
         int lim = Math.max(1, Math.min(limit, 500));

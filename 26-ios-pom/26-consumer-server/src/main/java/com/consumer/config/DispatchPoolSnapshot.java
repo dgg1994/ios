@@ -14,13 +14,19 @@ public class DispatchPoolSnapshot {
 
     @Resource(name = "archiveScanExecutor")
     private ExecutorService archiveScanExecutor;
+    @Resource(name = "archiveScanExecutorV1")
+    private ExecutorService archiveScanExecutorV1;
     @Resource(name = "balanceHttpExecutor")
     private ExecutorService balanceHttpExecutor;
+    @Resource(name = "balanceHttpExecutorV1")
+    private ExecutorService balanceHttpExecutorV1;
 
     public Map<String, Object> snapshot() {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("archiveScan", one(archiveScanExecutor));
+        m.put("archiveScanV1", one(archiveScanExecutorV1));
         m.put("balanceHttp", one(balanceHttpExecutor));
+        m.put("balanceHttpV1", one(balanceHttpExecutorV1));
         return m;
     }
 

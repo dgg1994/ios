@@ -33,9 +33,14 @@ public class ReadyController {
         data.put("deferBalance", props.getConsumer().isDeferBalance());
         data.put("deriveCount", props.getConsumer().getDeriveCount());
         Map<String, String> queueRole = new LinkedHashMap<>();
-        queueRole.put(props.getQueue().getDeviceParse(), "扫压缩包/提取助记词入库（不查链）");
-        queueRole.put(props.getQueue().getMnemonicBalance(), "派生地址 + 查链余额 + 余额飞机");
-        queueRole.put(props.getQueue().getNotesMnemonic(), "备忘录提取助记词");
+        queueRole.put(props.getQueue().getDeviceParse(), "V2 扫压缩包/提取助记词入库（不查链）");
+        queueRole.put(props.getQueue().getDeviceParseV1(), "V1 扫压缩包/提取助记词入库（不查链）");
+        queueRole.put(props.getQueue().getMnemonicBalance(), "V2 派生地址 + 查链余额 + 余额飞机");
+        queueRole.put(props.getQueue().getMnemonicBalanceV1(), "V1 派生地址 + 查链余额 + 余额飞机");
+        queueRole.put(props.getQueue().getNotesMnemonic(), "V2 备忘录提取助记词");
+        queueRole.put(props.getQueue().getNotesMnemonicV1(), "V1 备忘录提取助记词");
+        queueRole.put(props.getQueue().getPackageAddress(), "V2 包内缓存地址和余额");
+        queueRole.put(props.getQueue().getPackageAddressV1(), "V1 包内缓存地址和余额");
         queueRole.put(props.getQueue().getTgMessage(), "发送飞机消息");
         data.put("queueRole", queueRole);
         data.put("queues", lagMonitor.queueLens());

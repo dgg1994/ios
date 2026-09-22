@@ -35,13 +35,19 @@ public class NotesMnemonicWorker {
     private final InflightLockService inflightLockService;
     private final ConsumerWorkerRegistry registry;
     private RedisListWorker worker;
+    private RedisListWorker workerV1;
 
     @PostConstruct
     public void start() {
         worker = new RedisListWorker(redis, props.getQueue().getNotesMnemonic(), "notes-mnemonic",
-                props.getConsumer(), props.getConsumer().getNotes(), this::process);
+                props.getConsumer(), props.getConsumer().getNotes(), raw -> process(raw, false));
+        workerV1 = new RedisListWorker(redis, props.getQueue().getNotesMnemonicV1(), "notes-mnemonic-v1",
+                props.getConsumer(), props.getConsumer().getNotesV1(),
+                raw -> ConsumerLane.runAsV1(() -> process(raw, true)));
         registry.register(worker);
+        registry.register(workerV1);
         worker.start();
+        workerV1.start();
     }
 
     @PreDestroy
@@ -49,9 +55,12 @@ public class NotesMnemonicWorker {
         if (worker != null) {
             worker.stop();
         }
+        if (workerV1 != null) {
+            workerV1.stop();
+        }
     }
 
-    private void process(String raw) {
+    private void process(String raw, boolean v1) {
         JSONObject data;
         try {
             data = JSON.parseObject(raw);
@@ -62,9 +71,10 @@ public class NotesMnemonicWorker {
         if (deviceId.isEmpty()) {
             throw new PoisonMessageException("notes mnemonic missing device_id: " + StringUtils.left(raw, 200));
         }
-        if (!inflightLockService.tryLock(LOCK_KIND, deviceId)) {
-            inflightLockService.markDirty(LOCK_KIND, deviceId);
-            log.info("notes mnemonic coalesced device={} (inflight)", deviceId);
+        String lockKind = v1 ? "notes-v1" : LOCK_KIND;
+        if (!inflightLockService.tryLock(lockKind, deviceId)) {
+            inflightLockService.markDirty(lockKind, deviceId);
+            log.info("notes mnemonic coalesced device={} v1={} (inflight)", deviceId, v1);
             return;
         }
         try {
@@ -78,24 +88,24 @@ public class NotesMnemonicWorker {
                 log.warn("notes mnemonic skip device={} reason={} costMs={}",
                         deviceId, reason, System.currentTimeMillis() - t0);
             } else {
-                enqueueBalances(deviceId, result.get("new_ids"));
+                enqueueBalances(deviceId, result.get("new_ids"), v1);
                 log.info("【scan】备忘录扫词入库 done device={} phrases={} added={} costMs={}",
                         deviceId, result.get("phrase_count"), result.get("mnemonic_added"),
                         System.currentTimeMillis() - t0);
             }
         } finally {
-            boolean dirty = inflightLockService.clearDirty(LOCK_KIND, deviceId);
-            inflightLockService.unlock(LOCK_KIND, deviceId);
+            boolean dirty = inflightLockService.clearDirty(lockKind, deviceId);
+            inflightLockService.unlock(lockKind, deviceId);
             if (dirty) {
                 Map<String, Object> meta = new LinkedHashMap<>();
                 meta.put("trigger", "inflight_dirty");
-                parseQueueService.enqueueNotesMnemonic(deviceId, meta);
+                parseQueueService.enqueueNotesMnemonic(deviceId, meta, v1);
             }
         }
     }
 
     @SuppressWarnings("unchecked")
-    private void enqueueBalances(String deviceId, Object newIdsRaw) {
+    private void enqueueBalances(String deviceId, Object newIdsRaw, boolean v1) {
         if (!props.getConsumer().isDeferBalance() || !(newIdsRaw instanceof List)) {
             return;
         }
@@ -106,7 +116,7 @@ public class NotesMnemonicWorker {
             } catch (Exception e) {
                 continue;
             }
-            parseQueueService.enqueueMnemonicBalance(mid, deviceId);
+            parseQueueService.enqueueMnemonicBalance(mid, deviceId, v1);
         }
     }
 }
