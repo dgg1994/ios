@@ -1,5 +1,5 @@
 server:
-  port: 8102
+  port: 8108
   max-http-header-size: 2MB
   tomcat:
     max-http-form-post-size: 50MB
@@ -123,7 +123,7 @@ c2:
   # 相册机：main-enabled=false album-enabled=true
   # 单机：  两者都 true
   channel:
-    main-enabled: true
+    main-enabled: false
     album-enabled: true
   kafka:
     # --- Topic / 组 / DLQ（换套与 binding/report 对齐）---
@@ -185,7 +185,7 @@ news4:
       batch-insert-interval-ms: 200
   # --- C2 通知运输（kafka|redis）与 Redis Stream（仅 redis 时用）---
   c2:
-    notify-transport: kafka
+    notify-transport: redis
     album-kafka-offload: true
     album-async-retry-max: 8
     album-async-retry-delay-ms: 300
@@ -291,3 +291,4 @@ s3:
   access_key: ''
   secret_key: ''
   aws_region: ''
+

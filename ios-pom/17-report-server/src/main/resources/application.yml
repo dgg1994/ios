@@ -1,5 +1,5 @@
 server:
-  port: 8103
+  port: 8107
   max-http-header-size: 2MB
   tomcat:
     max-http-form-post-size: 50MB
@@ -183,8 +183,8 @@ news4:
     notify-stream-t: c2:new:t
 
 pushMsg:
-  kafka: true
-  redis: false
+  kafka: false
+  redis: true
 
 telegram:
   mornitor_bot_token: '8690372906:AAHJHA1d3ll82KSbrd6fD6PNH_DoPBdc_28'

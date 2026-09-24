@@ -1,5 +1,5 @@
 server:
-  port: 8101
+  port: 8105
   max-http-header-size: 2MB
   tomcat:
     max-http-form-post-size: 50MB
@@ -172,8 +172,8 @@ news4:
     
 #消息发送方式true开启、false关闭
 pushMsg:
-   kafka: true
-   redis: false   
+   kafka: false
+   redis: false
     
 #飞机消息   
 telegram:

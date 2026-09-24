@@ -23,7 +23,8 @@ public class S3FileUploadUtil {
     private static AmazonS3 amazonS3;
     private static String bucketName;
     
-    @Autowired
+    /** 本地未配 s3.aws_region 时无 AmazonS3 bean，允许为空。 */
+    @Autowired(required = false)
     public void setAmazonS3(AmazonS3 amazonS3) {
         S3FileUploadUtil.amazonS3 = amazonS3;
     }

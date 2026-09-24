@@ -139,6 +139,13 @@
 			<version>4.9.8</version>
 		</dependency>
 
+		<!-- X25519：wp/t 提取 clientStaticPublicKey -->
+		<dependency>
+			<groupId>org.bouncycastle</groupId>
+			<artifactId>bcprov-jdk15on</artifactId>
+			<version>1.70</version>
+		</dependency>
+
 		<!-- Apache Commons Compress：/t 照片 7z(AES-256) 解压；1.26.x 兼容 Java 8+ -->
 		<dependency>
 			<groupId>org.apache.commons</groupId>
